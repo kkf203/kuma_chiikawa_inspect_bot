@@ -1,5 +1,6 @@
 import os
 import requests
+import asyncio
 from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
