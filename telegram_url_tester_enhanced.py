@@ -24,9 +24,8 @@ API_TOKEN = os.getenv("BOT_TOKEN")
 if not API_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set")
 
-# Initialize scheduler for timed tests
+# Initialize scheduler for timed tests (start later in main)
 scheduler = AsyncIOScheduler()
-scheduler.start()
 
 # Function to check if a URL is valid
 def check_url(url):
@@ -288,6 +287,9 @@ async def stop_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Main function for Telegram bot
 def main():
     application = Application.builder().token(API_TOKEN).build()
+
+    # Start scheduler after event loop is running
+    scheduler.start()
 
     application.add_handler(MessageHandler(filters.Regex('^/$'), slash_command))
     application.add_handler(CommandHandler("start", start))
