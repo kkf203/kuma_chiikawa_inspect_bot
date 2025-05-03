@@ -4,6 +4,16 @@ import asyncio
 from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from flask import Flask
+import threading
+
+# Initialize Flask app
+app = Flask(__name__)
+
+# Basic route to satisfy Render's port requirement
+@app.route('/')
+def home():
+    return "Telegram Bot is running!"
 
 # Get Bot Token from environment variable
 API_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
@@ -77,7 +87,7 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     url_template = context.user_data['url']
     attempts = context.user_data['attempts']
-    initial_number = context.user_data.get('initial_number', 4571609355779)  # Default if not set
+    initial_number = context.user_data.get('initial_number', 4571609355779)
 
     for i in range(attempts):
         if not context.user_data['testing']:
@@ -97,7 +107,7 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"結果: 有效"
             )
         
-        await asyncio.sleep(0.5)  # Prevent overwhelming the server
+        await asyncio.sleep(0.5)
 
     if context.user_data['testing']:
         valid_urls = context.user_data['valid_urls']
@@ -142,7 +152,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("測試已停止，沒有找到有效網址。")
 
-# Main function
+# Main function for Telegram bot
 def main():
     application = Application.builder().token(API_TOKEN).build()
 
@@ -157,5 +167,13 @@ def main():
 
     application.run_polling(timeout=10, poll_interval=1.0)
 
+# Run Flask and Telegram bot in separate threads
+def run_flask():
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
+
 if __name__ == '__main__':
+    # Start Flask in a separate thread
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.start()
+    # Run Telegram bot
     main()
