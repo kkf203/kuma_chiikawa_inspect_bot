@@ -165,7 +165,7 @@ def main():
     application.add_handler(CommandHandler("resume", resume))
     application.add_handler(CommandHandler("stop", stop))
 
-    application.run_polling(timeout=10, poll_interval=1.0)
+    application.run_polling(timeout=10, poll_interval=2.0)
 
 # Run Flask and Telegram bot in separate threads
 def run_flask():
