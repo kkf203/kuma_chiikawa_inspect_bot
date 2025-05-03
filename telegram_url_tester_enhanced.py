@@ -142,7 +142,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("測試已停止，沒有找到有效網址。")
 
 # Main function
-async def main():
+def main():
     application = Application.builder().token(API_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -154,9 +154,7 @@ async def main():
     application.add_handler(CommandHandler("resume", resume))
     application.add_handler(CommandHandler("stop", stop))
 
-    await application.run_polling(timeout=10, poll_interval=1.0)
+    application.run_polling(timeout=10, poll_interval=1.0)
 
 if __name__ == '__main__':
-    import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    main()
