@@ -52,7 +52,7 @@ async def set_attempts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['attempts'] = attempts
     await update.message.reply_text(f"測試次數已設置為：{attempts}")
 
-# New setid command
+# Set initial number command
 async def set_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or not context.args[0].isdigit():
         await update.message.reply_text("請提供有效數字！格式：/setid <數字>")
@@ -148,14 +148,15 @@ async def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("seturl", set_url))
     application.add_handler(CommandHandler("setattempts", set_attempts))
-    application.add_handler(CommandHandler("setid", set_id))  # New handler
+    application.add_handler(CommandHandler("setid", set_id))
     application.add_handler(CommandHandler("test", test))
     application.add_handler(CommandHandler("pause", pause))
     application.add_handler(CommandHandler("resume", resume))
     application.add_handler(CommandHandler("stop", stop))
 
-    await application.run_polling()
+    await application.run_polling(timeout=10, poll_interval=1.0)
 
 if __name__ == '__main__':
     import asyncio
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
