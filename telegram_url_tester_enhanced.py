@@ -1,5 +1,5 @@
 import asyncio
-     import logging
+import logging
      import os
      import threading
      import httpx
@@ -124,7 +124,7 @@ import asyncio
          """處理 /stop 命令，停止當前測試。"""
          if context.user_data.get('testing', False):
              context.user_data['testing'] = False
-             await update.message.reply_text("測試已停止！")
+             await update.message.reply_text("測試 已停止！")
              logger.info("Received stop command")
          else:
              await update.message.reply_text("目前沒有正在進行的測試。")
