@@ -1,211 +1,184 @@
 import asyncio
 import logging
+import re
+from urllib.parse import urljoin
+
 import httpx
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-from telegram.error import TelegramError
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+)
 
-# 設置日誌
+# Logging setup
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-async def check_url(url: str) -> bool:
-    """檢查指定 URL 是否有效。"""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url, follow_redirects=True)
-            response.raise_for_status()  # 檢查是否有 HTTP 錯誤（例如 404）
-            
-            # 檢查回應內容是否包含無效訊息
-            invalid_messages = [
-                "The page you’re looking for couldn’t be found.",
-                "Not Found",
-                "404error"
-            ]
-            is_invalid = any(msg in response.text for msg in invalid_messages)
-            
-            return not is_invalid  # 如果包含無效訊息，返回 False，否則返回 True
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error for {url}: {e}")
-        return False
-    except httpx.RequestError as e:
-        logger.error(f"Request error for {url}: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"Unexpected error for {url}: {e}")
-        return False
+# Global variables
+TOKEN = "7928836301:AAHlTTCy0QFJ9lNz3kRMgR66-BfXfDA6ErM"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """處理 /start 命令，提供 BOT 說明。"""
-    example_url = "https://example.com/cdn/shop/files/{}_1.jpg"
-    example_attempts = 10
-    example_id = 123456
-
-    context.user_data['url_template'] = example_url
-    context.user_data['attempts'] = example_attempts
-    context.user_data['start_id'] = example_id
-    context.user_data['testing'] = False
-
-    message = (
-        "歡迎使用 URL 測試 BOT！\n\n"
-        "請按照以下步驟操作：\n"
-        f"1. 設置 URL 模板，例如：/seturl {example_url}\n"
-        f"2. 設置測試次數，例如：/setattempts {example_attempts}\n"
-        f"3. 設置起始 ID，例如：/setid {example_id}\n"
-        "4. 執行 /test 開始測試\n\n"
-        "其他命令：\n"
-        "- /stop: 停止當前測試\n"
-        "- /reset: 重置所有設置\n"
-        "- /showsettings: 顯示當前設置\n\n"
-        "開始設置吧！"
+    """Send a welcome message with example."""
+    example_url = "https://chiikawamarket.jp/cdn/shop/files/{}_1.jpg"
+    example_id = "4571609355854"
+    example_attempts = 5
+    await update.message.reply_text(
+        f"Welcome to URL Tester Bot!\n\n"
+        f"1. Set URL template with /seturl {example_url}\n"
+        f"2. Set starting ID with /setid {example_id}\n"
+        f"3. Set number of attempts with /setattempts {example_attempts}\n"
+        f"4. Run test with /test\n"
+        f"5. Stop test with /stop\n\n"
+        f"Use the menu button to see all commands."
     )
-    await update.message.reply_text(message)
-    logger.info("Received start command")
 
 async def set_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """處理 /seturl 命令，設置 URL 模板。"""
-    if not context.args:
-        await update.message.reply_text("請提供 URL 模板，例如：/seturl https://example.com/cdn/shop/files/{}_1.jpg")
-        return
-    context.user_data['url_template'] = context.args[0]
-    await update.message.reply_text(f"URL 模板已設為：{context.user_data['url_template']}")
-    logger.info("Received seturl command")
-
-async def set_attempts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """處理 /setattempts 命令，設置測試次數。"""
-    if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("請提供有效的測試次數，例如：/setattempts 10")
-        return
-    context.user_data['attempts'] = int(context.args[0])
-    await update.message.reply_text(f"測試次數已設為：{context.user_data['attempts']}")
-    logger.info("Received setattempts command")
+    """Set the URL template."""
+    if context.args:
+        context.user_data["url_template"] = context.args[0]
+        await update.message.reply_text(f"URL template set to: {context.user_data['url_template']}")
+    else:
+        await update.message.reply_text("Please provide a URL template. Example: /seturl https://example.com/{}_1.jpg")
 
 async def set_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """處理 /setid 命令，設置起始 ID。"""
-    if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("請提供有效的起始 ID，例如：/setid 123456")
-        return
-    context.user_data['start_id'] = int(context.args[0])
-    await update.message.reply_text(f"起始 ID 已設為：{context.user_data['start_id']}")
-    logger.info("Received setid command")
-
-async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """處理 /showsettings 命令，顯示當前設置。"""
-    url_template = context.user_data.get('url_template', '未設置')
-    attempts = context.user_data.get('attempts', '未設置')
-    start_id = context.user_data.get('start_id', '未設置')
-    message = (
-        f"當前設置：\n"
-        f"URL 模板：{url_template}\n"
-        f"測試次數：{attempts}\n"
-        f"起始 ID：{start_id}"
-    )
-    await update.message.reply_text(message)
-
-async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """處理 /reset 命令，重置所有設置。"""
-    context.user_data.clear()
-    context.user_data['testing'] = False
-    await update.message.reply_text("所有設置已重置！請重新設置 URL、測試次數和起始 ID。")
-    logger.info("Received reset command")
-
-async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """處理 /stop 命令，停止當前測試。"""
-    if context.user_data.get('testing', False):
-        context.user_data['testing'] = False
-        await update.message.reply_text("測試已停止！")
-        logger.info("Received stop command")
+    """Set the starting ID."""
+    if context.args and context.args[0].isdigit():
+        context.user_data["start_id"] = int(context.args[0])
+        await update.message.reply_text(f"Starting ID set to: {context.user_data['start_id']}")
     else:
-        await update.message.reply_text("目前沒有正在進行的測試。")
+        await update.message.reply_text("Please provide a valid numeric ID. Example: /setid 12345")
+
+async def set_attempts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the number of attempts."""
+    if context.args and context.args[0].isdigit():
+        context.user_data["attempts"] = int(context.args[0])
+        await update.message.reply_text(f"Number of attempts set to: {context.user_data['attempts']}")
+    else:
+        await update.message.reply_text("Please provide a valid number of attempts. Example: /setattempts 5")
+
+async def check_url(client: httpx.AsyncClient, url: str) -> tuple[bool, str]:
+    """Check if the URL is valid."""
+    try:
+        response = await client.get(url, follow_redirects=True)
+        if response.status_code == 200:
+            content = response.text.lower()  # Convert to lowercase for case-insensitive checks
+            # Check for invalid page indicators
+            if (
+                "the page you’re looking for couldn’t be found." in content
+                or "not found" in content
+                or "404error" in content
+            ):
+                return False, url
+            return True, url
+        return False, url
+    except httpx.RequestError as e:
+        logger.error(f"Error checking URL {url}: {e}")
+        return False, url
 
 async def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """執行 URL 測試邏輯。"""
-    if context.user_data.get('testing', False):
-        await update.message.reply_text("測試已在進行！請先 /stop 或等待測試完成。")
+    """Run the URL test."""
+    if context.user_data.get("testing", False):
+        await update.message.reply_text("Test is already running! Use /stop or /pause to manage it.")
         return
 
-    if 'url_template' not in context.user_data or 'attempts' not in context.user_data or 'start_id' not in context.user_data:
-        await update.message.reply_text("請先設置 URL 模板、測試次數和起始 ID！使用 /seturl, /setattempts, /setid。")
+    # Check if required parameters are set
+    if "url_template" not in context.user_data:
+        await update.message.reply_text("Please set the URL template first with /seturl")
+        return
+    if "start_id" not in context.user_data:
+        await update.message.reply_text("Please set the starting ID first with /setid")
+        return
+    if "attempts" not in context.user_data:
+        await update.message.reply_text("Please set the number of attempts first with /setattempts")
         return
 
-    context.user_data['testing'] = True
-    url_template = context.user_data['url_template']
-    attempts = context.user_data['attempts']
-    start_id = context.user_data['start_id']
+    context.user_data["testing"] = True
+    url_template = context.user_data["url_template"]
+    start_id = context.user_data["start_id"]
+    attempts = context.user_data["attempts"]
     valid_urls = []
 
     try:
-        await update.message.reply_text("測試開始！請稍候...")
-        logger.info("Received test command")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for i in range(attempts):
+                if not context.user_data.get("testing", False):
+                    await update.message.reply_text("Test stopped.")
+                    break
 
-        for i in range(attempts):
-            if not context.user_data.get('testing', False):
-                await update.message.reply_text("測試被中止。")
-                break
+                current_id = start_id + i
+                url = url_template.format(current_id)
+                logger.info(f"Testing URL {url}")
+                is_valid, tested_url = await check_url(client, url)
 
-            current_id = start_id + i
-            url = url_template.format(current_id)
-            logger.info(f"Testing URL {url}")
+                if is_valid:
+                    valid_urls.append(tested_url)
 
-            is_valid = await check_url(url)
-            if is_valid:
-                valid_urls.append(url)
+                # Send progress update every 10 URLs
+                if (i + 1) % 10 == 0:
+                    await update.message.reply_text(f"Tested {i + 1}/{attempts} URLs. Found {len(valid_urls)} valid URLs so far.")
 
-            # 每 25 次測試發送進度更新
-            if (i + 1) % 25 == 0:
-                await update.message.reply_text(f"已測試 {i + 1}/{attempts} 個 URL，有效 URL 數量：{len(valid_urls)}")
+                # Small delay to avoid overwhelming the server
+                await asyncio.sleep(1)
 
-            await asyncio.sleep(1)  # 避免過快請求
-
+        # Send final result
         if valid_urls:
-            message = "測試完成！以下是所有有效網址：\n" + "\n".join(valid_urls)
+            result = "Test completed! Found the following valid URLs:\n" + "\n".join(valid_urls)
         else:
-            message = "測試完成，沒有找到有效網址。"
-        await update.message.reply_text(message)
-        logger.info("Test completed")
+            result = "Test completed. No valid URLs found."
+        await update.message.reply_text(result)
 
-    except TelegramError as e:
-        logger.error(f"Telegram error during test: {e}")
-        await update.message.reply_text("發送訊息時發生錯誤，請稍後再試。")
     except Exception as e:
-        logger.error(f"Unexpected error during test: {e}")
-        await update.message.reply_text("測試過程中發生未知錯誤，請稍後再試。")
+        logger.error(f"Test failed: {e}")
+        await update.message.reply_text(f"Test failed due to an error: {e}")
     finally:
-        context.user_data['testing'] = False
+        context.user_data["testing"] = False
+        logger.info("Test completed")
         logger.info("Test state reset")
 
-async def test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """處理 /test 命令，啟動測試。"""
-    await run_test(update, context)
+async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop the running test."""
+    if context.user_data.get("testing", False):
+        context.user_data["testing"] = False
+        await update.message.reply_text("Test stopping... Please wait for the current operation to complete.")
+    else:
+        await update.message.reply_text("No test is currently running.")
 
 async def health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """處理 /health 命令，返回健康狀態。"""
+    """Health check endpoint."""
     await update.message.reply_text("OK")
 
 def main() -> None:
-    """主函數，啟動 Telegram BOT。"""
-    # 從環境變數或直接設置 Token
-    token = "7928836301:AAHlTTCy0QFJ9lNz3kRMgR66-BfXfDA6ErM"
-    
-    application = Application.builder().token(token).build()
+    """Run the bot."""
+    application = Application.builder().token(TOKEN).post_init(post_init).build()
 
-    # 註冊命令處理器
+    # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("seturl", set_url))
-    application.add_handler(CommandHandler("setattempts", set_attempts))
     application.add_handler(CommandHandler("setid", set_id))
-    application.add_handler(CommandHandler("test", test))
+    application.add_handler(CommandHandler("setattempts", set_attempts))
+    application.add_handler(CommandHandler("test", run_test))
     application.add_handler(CommandHandler("stop", stop))
-    application.add_handler(CommandHandler("reset", reset))
-    application.add_handler(CommandHandler("showsettings", show_settings))
     application.add_handler(CommandHandler("health", health))
 
-    # 啟動 BOT
-    logger.info("Starting polling")
+    # Start the bot
     application.run_polling(timeout=10, poll_interval=1.0)
 
-if __name__ == '__main__':
+async def post_init(application: Application) -> None:
+    """Set bot commands after initialization."""
+    commands = [
+        ("start", "Start the bot and show instructions"),
+        ("seturl", "Set the URL template"),
+        ("setid", "Set the starting ID"),
+        ("setattempts", "Set the number of attempts"),
+        ("test", "Run the URL test"),
+        ("stop", "Stop the running test"),
+        ("health", "Check bot health"),
+    ]
+    await application.bot.set_my_commands([(cmd, desc) for cmd, desc in commands])
+    logger.info("Bot commands set")
+
+if __name__ == "__main__":
     main()
