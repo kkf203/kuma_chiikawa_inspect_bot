@@ -190,8 +190,8 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def run_flask():
     """在獨立線程中運行 Flask 伺服器"""
-    port = int(os.getenv("PORT", 10000))
-    flask_app.run(host="0.0.0.0", port=port)
+    port = int(os.getenv("PORT", 10000))  # 使用 Render 的 PORT，默認為 10000
+    flask_app.run(host="0.0.0.0", port=port, debug=False)
 
 async def run_bot():
     """運行 Telegram BOT"""
@@ -207,25 +207,20 @@ async def run_bot():
     application.add_handler(CommandHandler("reset", reset))
     application.add_handler(CommandHandler("showsettings", show_settings))
 
-    while True:
-        try:
-            logger.info("Starting polling")
-            await application.run_polling(timeout=10, poll_interval=1.0)
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            logger.info("Restarting polling...")
-            await asyncio.sleep(5)
+    try:
+        await application.run_polling(timeout=10, poll_interval=1.0, drop_pending_updates=True)
+    except Exception as e:
+        logger.error(f"Polling error: {e}")
+        logger.info("Restarting polling after 5 seconds...")
+        await asyncio.sleep(5)
+        await run_bot()  # 遞迴重試
 
 def main():
     """主函數，啟動 Flask 和 Telegram BOT"""
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    loop = asyncio.get_event_loop()
-    try:
-        loop.run_until_complete(run_bot())
-    finally:
-        loop.close()
+    asyncio.run(run_bot())  # 使用 asyncio.run 簡化事件循環管理
 
 if __name__ == '__main__':
     main()
