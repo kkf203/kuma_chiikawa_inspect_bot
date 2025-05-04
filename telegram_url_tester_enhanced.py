@@ -4,13 +4,15 @@ import asyncio
 import logging
 from datetime import datetime
 from bs4 import BeautifulSoup
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.error import Conflict
 from flask import Flask
 import threading
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 import pytz
+import time
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -32,18 +34,22 @@ if not API_TOKEN:
 # Initialize scheduler for timed tests
 scheduler = AsyncIOScheduler()
 
-# Function to check if a URL is valid
-def check_url(url):
-    try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            if "The page you’re looking for couldn’t be found." not in response.text:
-                return True
+# Function to check if a URL is valid with retry
+def check_url(url, retries=3, timeout=10):
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, timeout=timeout)
+            if response.status_code == 200:
+                if "The page you’re looking for couldn’t be found." not in response.text:
+                    return True
+                return False
             return False
-        return False
-    except requests.RequestException as e:
-        logger.error(f"Error checking URL {url}: {e}")
-        return False
+        except requests.RequestException as e:
+            logger.error(f"Attempt {attempt+1} failed for URL {url}: {e}")
+            if attempt < retries - 1:
+                time.sleep(1)  # Wait before retry
+            continue
+    return False
 
 # Command to handle standalone "/"
 async def slash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -52,14 +58,14 @@ async def slash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "可用命令：\n"
             "/start - 顯示歡迎訊息\n"
-            "/seturl <網址> - 設置網址模板\n"
-            "/setattempts <次數> - 設置測試次數\n"
-            "/setid <數字> - 設置初始數字\n"
+            "/seturl <網址> - 設置網址模板，例如 /seturl https://example.com/{}_1.jpg\n"
+            "/setattempts <次數> - 設置測試次數，例如 /setattempts 10\n"
+            "/setid <數字> - 設置初始數字，例如 /setid 4571609355779\n"
             "/test - 開始測試\n"
             "/pause - 暫停測試\n"
             "/resume - 繼續測試\n"
             "/stop - 停止測試\n"
-            "/scheduletest <日期> <時間> <時區> - 設定定時測試 (例如 /scheduletest 2025-05-10 14:30 GMT)\n"
+            "/scheduletest <日期> <時間> <時區> - 設定定時測試，例如 /scheduletest 2025-05-10 14:30 GMT\n"
             "/stopschedule - 停止定時測試"
         )
 
@@ -70,14 +76,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "歡迎使用增強版 URL 測試機器人！\n"
         "可用命令：\n"
         "/start - 顯示歡迎訊息\n"
-        "/seturl <網址> - 設置網址模板\n"
-        "/setattempts <次數> - 設置測試次數\n"
-        "/setid <數字> - 設置初始數字\n"
+        "/seturl <網址> - 設置網址模板，例如 /seturl https://example.com/{}_1.jpg\n"
+        "/setattempts <次數> - 設置測試次數，例如 /setattempts 10\n"
+        "/setid <數字> - 設置初始數字，例如 /setid 4571609355779\n"
         "/test - 開始測試\n"
         "/pause - 暫停測試\n"
         "/resume - 繼續測試\n"
         "/stop - 停止測試\n"
-        "/scheduletest <日期> <時間> <時區> - 設定定時測試 (例如 /scheduletest 2025-05-10 14:30 GMT)\n"
+        "/scheduletest <日期> <時間> <時區> - 設定定時測試，例如 /scheduletest 2025-05-10 14:30 GMT\n"
         "/stopschedule - 停止定時測試"
     )
 
@@ -85,7 +91,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received seturl command")
     if not context.args:
-        await update.message.reply_text("請提供網址！格式：/seturl <網址>")
+        await update.message.reply_text("請提供網址！格式：/seturl <網址> 例如 /seturl https://example.com/{}_1.jpg")
         return
     url = context.args[0]
     context.user_data['url'] = url
@@ -95,7 +101,7 @@ async def set_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_attempts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received setattempts command")
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("請提供有效數字！格式：/setattempts <次數>")
+        await update.message.reply_text("請提供有效數字！格式：/setattempts <次數> 例如 /setattempts 10")
         return
     attempts = int(context.args[0])
     context.user_data['attempts'] = attempts
@@ -105,7 +111,7 @@ async def set_attempts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received setid command")
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("請提供有效數字！格式：/setid <數字>")
+        await update.message.reply_text("請提供有效數字！格式：/setid <數字> 例如 /setid 4571609355779")
         return
     initial_number = int(context.args[0])
     context.user_data['initial_number'] = initial_number
@@ -124,46 +130,58 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['testing'] = True
     context.user_data['paused'] = False
     context.user_data['valid_urls'] = []
-    
-    url_template = context.user_data['url']
-    attempts = context.user_data['attempts']
-    initial_number = context.user_data.get('initial_number', 4571609355779)
 
-    try:
-        for i in range(attempts):
-            if not context.user_data['testing']:
-                break
-            if context.user_data.get('paused', False):
-                while context.user_data.get('paused', False) and context.user_data['testing']:
-                    await asyncio.sleep(1)
-            
-            current_number = initial_number + i
-            test_url = url_template.format(current_number)
-            
-            if check_url(test_url):
-                context.user_data['valid_urls'].append(test_url)
+    async def run_test():
+        url_template = context.user_data['url']
+        attempts = context.user_data['attempts']
+        initial_number = context.user_data.get('initial_number', 4571609355779)
+
+        try:
+            for i in range(attempts):
+                if not context.user_data['testing']:
+                    break
+                if context.user_data.get('paused', False):
+                    while context.user_data.get('paused', False) and context.user_data['testing']:
+                        await asyncio.sleep(1)
+
+                current_number = initial_number + i
+                test_url = url_template.format(current_number)
+                logger.info(f"Testing URL {test_url}")
+
+                if check_url(test_url):
+                    context.user_data['valid_urls'].append(test_url)
+                    await update.message.reply_text(
+                        f"嘗試 {i+1}: 數字 = {current_number}\n"
+                        f"網址 = {test_url}\n"
+                        f"結果: 有效"
+                    )
+                    await asyncio.sleep(1)  # Prevent Telegram rate limiting
+
+                await asyncio.sleep(0.5)  # Small delay to avoid overwhelming the server
+
+                # Progress update every 10 attempts
+                if (i + 1) % 10 == 0:
+                    await update.message.reply_text(f"進度：已完成 {i+1}/{attempts} 次測試")
+
+            valid_urls = context.user_data['valid_urls']
+            if valid_urls:
                 await update.message.reply_text(
-                    f"嘗試 {i+1}: 數字 = {current_number}\n"
-                    f"網址 = {test_url}\n"
-                    f"結果: 有效"
+                    "測試完成！以下是所有有效網址：\n" + "\n".join(valid_urls)
                 )
-                await asyncio.sleep(1)  # Prevent Telegram rate limiting
-            
-            await asyncio.sleep(0.5)  # Small delay to avoid overwhelming the server
+            else:
+                await update.message.reply_text("測試完成，沒有找到有效網址。")
+            logger.info("Test completed")
 
-        valid_urls = context.user_data['valid_urls']
-        if valid_urls:
-            await update.message.reply_text(
-                "測試完成！以下是所有有效網址：\n" + "\n".join(valid_urls)
-            )
-        else:
-            await update.message.reply_text("測試完成，沒有找到有效網址。")
+        except Exception as e:
+            logger.error(f"Error during test: {e}")
+            await update.message.reply_text(f"測試發生錯誤：{e}")
+        finally:
+            context.user_data['testing'] = False
+            logger.info("Test state reset")
 
-    except Exception as e:
-        logger.error(f"Error during test: {e}")
-        await update.message.reply_text(f"測試發生錯誤：{e}")
-    finally:
-        context.user_data['testing'] = False
+    # Run test in a separate task to avoid blocking
+    asyncio.create_task(run_test())
+    await update.message.reply_text("測試已開始！")
 
 # Pause command
 async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -216,10 +234,8 @@ async def schedule_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     date_str, time_str, timezone = context.args[0], context.args[1], context.args[2]
     try:
-        # Parse date and time
         datetime_str = f"{date_str} {time_str}"
         scheduled_time = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
-        # Set timezone
         tz = pytz.timezone(timezone)
         scheduled_time = tz.localize(scheduled_time)
     except (ValueError, pytz.exceptions.UnknownTimeZoneError):
@@ -229,13 +245,11 @@ async def schedule_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Store schedule data
     context.user_data['scheduled_url'] = context.user_data['url']
     context.user_data['scheduled_attempts'] = context.user_data['attempts']
     context.user_data['scheduled_initial_number'] = context.user_data.get('initial_number', 4571609355779)
     context.user_data['scheduled_chat_id'] = update.effective_chat.id
 
-    # Schedule the test
     scheduler.add_job(
         run_scheduled_test,
         trigger=DateTrigger(run_date=scheduled_time),
@@ -260,7 +274,8 @@ async def run_scheduled_test(user_data, bot):
         for i in range(attempts):
             current_number = initial_number + i
             test_url = url_template.format(current_number)
-            
+            logger.info(f"Scheduled test: Testing URL {test_url}")
+
             if check_url(test_url):
                 valid_urls.append(test_url)
                 await bot.send_message(
@@ -271,9 +286,12 @@ async def run_scheduled_test(user_data, bot):
                         f"結果: 有效"
                     )
                 )
-                await asyncio.sleep(1)  # Prevent Telegram rate limiting
-            
+                await asyncio.sleep(1)
+
             await asyncio.sleep(0.5)
+
+            if (i + 1) % 10 == 0:
+                await bot.send_message(chat_id=chat_id, text=f"進度：已完成 {i+1}/{attempts} 次測試")
 
         if valid_urls:
             await bot.send_message(
@@ -285,6 +303,7 @@ async def run_scheduled_test(user_data, bot):
                 chat_id=chat_id,
                 text="定時測試完成，沒有找到有效網址。"
             )
+        logger.info("Scheduled test completed")
 
     except Exception as e:
         logger.error(f"Error during scheduled test: {e}")
@@ -299,12 +318,28 @@ async def stop_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("沒有正在排程的定時測試。")
 
-# Post-init callback to start scheduler
+# Post-init callback to start scheduler and set bot commands
 async def post_init(application: Application):
-    logger.info("Starting scheduler in post_init")
+    logger.info("Starting scheduler and setting bot commands in post_init")
     scheduler.start()
 
-# Main function for Telegram bot
+    # Set Telegram Bot Menu
+    commands = [
+        BotCommand("start", "顯示歡迎訊息"),
+        BotCommand("seturl", "設置網址模板，例如 /seturl https://example.com/{}_1.jpg"),
+        BotCommand("setattempts", "設置測試次數，例如 /setattempts 10"),
+        BotCommand("setid", "設置初始數字，例如 /setid 4571609355779"),
+        BotCommand("test", "開始測試"),
+        BotCommand("pause", "暫停測試"),
+        BotCommand("resume", "繼續測試"),
+        BotCommand("stop", "停止測試"),
+        BotCommand("scheduletest", "設定定時測試，例如 /scheduletest 2025-05-10 14:30 GMT"),
+        BotCommand("stopschedule", "停止定時測試")
+    ]
+    await application.bot.set_my_commands(commands)
+    logger.info("Bot commands set")
+
+# Main function for Telegram bot with conflict handling
 def main():
     application = Application.builder().token(API_TOKEN).post_init(post_init).build()
 
@@ -320,15 +355,26 @@ def main():
     application.add_handler(CommandHandler("scheduletest", schedule_test))
     application.add_handler(CommandHandler("stopschedule", stop_schedule))
 
-    application.run_polling(timeout=10, poll_interval=1.0)
+    max_retries = 3
+    retry_delay = 5
+    for attempt in range(max_retries):
+        try:
+            application.run_polling(timeout=10, poll_interval=1.0, drop_pending_updates=True)
+            break
+        except Conflict as e:
+            logger.error(f"Conflict error on attempt {attempt+1}: {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                logger.error("Max retries reached. Exiting.")
+                raise
 
 # Run Flask and Telegram bot in separate threads
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
 
 if __name__ == '__main__':
-    # Start Flask in a separate thread
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.start()
-    # Run Telegram bot
     main()
