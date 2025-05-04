@@ -1,6 +1,9 @@
 import asyncio
 import logging
+import os
+import threading
 import httpx
+from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
@@ -12,22 +15,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 初始化 Flask 應用
+flask_app = Flask(__name__)
+
+@flask_app.route('/health')
+def health():
+    """健康檢查端點，供 Render 使用"""
+    return "OK", 200
+
 async def check_url(url: str) -> bool:
     """檢查指定 URL 是否有效。"""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(url, follow_redirects=True)
-            response.raise_for_status()  # 檢查是否有 HTTP 錯誤（例如 404）
-            
-            # 檢查回應內容是否包含無效訊息
+            response.raise_for_status()
             invalid_messages = [
                 "The page you’re looking for couldn’t be found.",
                 "Not Found",
                 "404error"
             ]
             is_invalid = any(msg in response.text for msg in invalid_messages)
-            
-            return not is_invalid  # 如果包含無效訊息，返回 False，否則返回 True
+            return not is_invalid
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error for {url}: {e}")
         return False
@@ -154,11 +162,10 @@ async def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if is_valid:
                 valid_urls.append(url)
 
-            # 每 25 次測試發送進度更新
             if (i + 1) % 25 == 0:
                 await update.message.reply_text(f"已測試 {i + 1}/{attempts} 個 URL，有效 URL 數量：{len(valid_urls)}")
 
-            await asyncio.sleep(1)  # 避免過快請求
+            await asyncio.sleep(1)
 
         if valid_urls:
             message = "測試完成！以下是所有有效網址：\n" + "\n".join(valid_urls)
@@ -181,18 +188,16 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """處理 /test 命令，啟動測試。"""
     await run_test(update, context)
 
-async def health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """處理 /health 命令，返回健康狀態。"""
-    await update.message.reply_text("OK")
+def run_flask():
+    """在獨立線程中運行 Flask 伺服器"""
+    port = int(os.getenv("PORT", 10000))
+    flask_app.run(host="0.0.0.0", port=port)
 
-def main() -> None:
-    """主函數，啟動 Telegram BOT。"""
-    # 從環境變數或直接設置 Token
+async def run_bot():
+    """運行 Telegram BOT"""
     token = "7928836301:AAHlTTCy0QFJ9lNz3kRMgR66-BfXfDA6ErM"
-    
     application = Application.builder().token(token).build()
 
-    # 註冊命令處理器
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("seturl", set_url))
     application.add_handler(CommandHandler("setattempts", set_attempts))
@@ -201,11 +206,26 @@ def main() -> None:
     application.add_handler(CommandHandler("stop", stop))
     application.add_handler(CommandHandler("reset", reset))
     application.add_handler(CommandHandler("showsettings", show_settings))
-    application.add_handler(CommandHandler("health", health))
 
-    # 啟動 BOT
-    logger.info("Starting polling")
-    application.run_polling(timeout=10, poll_interval=1.0)
+    while True:
+        try:
+            logger.info("Starting polling")
+            await application.run_polling(timeout=10, poll_interval=1.0)
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+            logger.info("Restarting polling...")
+            await asyncio.sleep(5)
+
+def main():
+    """主函數，啟動 Flask 和 Telegram BOT"""
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(run_bot())
+    finally:
+        loop.close()
 
 if __name__ == '__main__':
     main()
