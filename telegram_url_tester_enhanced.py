@@ -6,7 +6,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-from telegram.error import Conflict
+from telegram.error import Conflict, NetworkError
 from flask import Flask
 import threading
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -25,6 +25,11 @@ app = Flask(__name__)
 @app.route('/')
 def home():
     return "Telegram Bot is running!"
+
+# Health check endpoint to prevent Render idle
+@app.route('/health')
+def health():
+    return "OK", 200
 
 # Get Bot Token from environment variable
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -47,7 +52,7 @@ def check_url(url, retries=3, timeout=10):
         except requests.RequestException as e:
             logger.error(f"Attempt {attempt+1} failed for URL {url}: {e}")
             if attempt < retries - 1:
-                time.sleep(1)  # Wait before retry
+                time.sleep(1)
             continue
     return False
 
@@ -58,9 +63,9 @@ async def slash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "可用命令：\n"
             "/start - 顯示歡迎訊息\n"
-            "/seturl <網址> - 設置網址模板，例如 /seturl https://example.com/{}_1.jpg\n"
+            "/seturl <網址> - 設置網址模板，例如 /seturl https://chiikawamarket.jp/cdn/shop/files/{}_1.jpg\n"
             "/setattempts <次數> - 設置測試次數，例如 /setattempts 10\n"
-            "/setid <數字> - 設置初始數字，例如 /setid 4571609355779\n"
+            "/setid <數字> - 設置初始數字，例如 /setid 4571609355900\n"
             "/test - 開始測試\n"
             "/pause - 暫停測試\n"
             "/resume - 繼續測試\n"
@@ -76,9 +81,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "歡迎使用增強版 URL 測試機器人！\n"
         "可用命令：\n"
         "/start - 顯示歡迎訊息\n"
-        "/seturl <網址> - 設置網址模板，例如 /seturl https://example.com/{}_1.jpg\n"
+        "/seturl <網址> - 設置網址模板，例如 /seturl https://chiikawamarket.jp/cdn/shop/files/{}_1.jpg\n"
         "/setattempts <次數> - 設置測試次數，例如 /setattempts 10\n"
-        "/setid <數字> - 設置初始數字，例如 /setid 4571609355779\n"
+        "/setid <數字> - 設置初始數字，例如 /setid 4571609355900\n"
         "/test - 開始測試\n"
         "/pause - 暫停測試\n"
         "/resume - 繼續測試\n"
@@ -91,7 +96,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received seturl command")
     if not context.args:
-        await update.message.reply_text("請提供網址！格式：/seturl <網址> 例如 /seturl https://example.com/{}_1.jpg")
+        await update.message.reply_text("請提供網址！格式：/seturl <網址> 例如 /seturl https://chiikawamarket.jp/cdn/shop/files/{}_1.jpg")
         return
     url = context.args[0]
     context.user_data['url'] = url
@@ -111,7 +116,7 @@ async def set_attempts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received setid command")
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("請提供有效數字！格式：/setid <數字> 例如 /setid 4571609355779")
+        await update.message.reply_text("請提供有效數字！格式：/setid <數字> 例如 /setid 4571609355900")
         return
     initial_number = int(context.args[0])
     context.user_data['initial_number'] = initial_number
@@ -134,7 +139,7 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async def run_test():
         url_template = context.user_data['url']
         attempts = context.user_data['attempts']
-        initial_number = context.user_data.get('initial_number', 4571609355779)
+        initial_number = context.user_data.get('initial_number', 4571609355900)
 
         try:
             for i in range(attempts):
@@ -155,11 +160,10 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"網址 = {test_url}\n"
                         f"結果: 有效"
                     )
-                    await asyncio.sleep(1)  # Prevent Telegram rate limiting
+                    await asyncio.sleep(1)
 
-                await asyncio.sleep(0.5)  # Small delay to avoid overwhelming the server
+                await asyncio.sleep(1)  # Increased delay to reduce CPU load
 
-                # Progress update every 10 attempts
                 if (i + 1) % 10 == 0:
                     await update.message.reply_text(f"進度：已完成 {i+1}/{attempts} 次測試")
 
@@ -179,7 +183,6 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['testing'] = False
             logger.info("Test state reset")
 
-    # Run test in a separate task to avoid blocking
     asyncio.create_task(run_test())
     await update.message.reply_text("測試已開始！")
 
@@ -247,7 +250,7 @@ async def schedule_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data['scheduled_url'] = context.user_data['url']
     context.user_data['scheduled_attempts'] = context.user_data['attempts']
-    context.user_data['scheduled_initial_number'] = context.user_data.get('initial_number', 4571609355779)
+    context.user_data['scheduled_initial_number'] = context.user_data.get('initial_number', 4571609355900)
     context.user_data['scheduled_chat_id'] = update.effective_chat.id
 
     scheduler.add_job(
@@ -288,7 +291,7 @@ async def run_scheduled_test(user_data, bot):
                 )
                 await asyncio.sleep(1)
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
 
             if (i + 1) % 10 == 0:
                 await bot.send_message(chat_id=chat_id, text=f"進度：已完成 {i+1}/{attempts} 次測試")
@@ -323,12 +326,11 @@ async def post_init(application: Application):
     logger.info("Starting scheduler and setting bot commands in post_init")
     scheduler.start()
 
-    # Set Telegram Bot Menu
     commands = [
         BotCommand("start", "顯示歡迎訊息"),
-        BotCommand("seturl", "設置網址模板，例如 /seturl https://example.com/{}_1.jpg"),
+        BotCommand("seturl", "設置網址模板，例如 /seturl https://chiikawamarket.jp/cdn/shop/files/{}_1.jpg"),
         BotCommand("setattempts", "設置測試次數，例如 /setattempts 10"),
-        BotCommand("setid", "設置初始數字，例如 /setid 4571609355779"),
+        BotCommand("setid", "設置初始數字，例如 /setid 4571609355900"),
         BotCommand("test", "開始測試"),
         BotCommand("pause", "暫停測試"),
         BotCommand("resume", "繼續測試"),
@@ -339,36 +341,34 @@ async def post_init(application: Application):
     await application.bot.set_my_commands(commands)
     logger.info("Bot commands set")
 
-# Main function for Telegram bot with conflict handling
+# Main function for Telegram bot with restart logic
 def main():
-    application = Application.builder().token(API_TOKEN).post_init(post_init).build()
-
-    application.add_handler(MessageHandler(filters.Regex('^/$'), slash_command))
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("seturl", set_url))
-    application.add_handler(CommandHandler("setattempts", set_attempts))
-    application.add_handler(CommandHandler("setid", set_id))
-    application.add_handler(CommandHandler("test", test))
-    application.add_handler(CommandHandler("pause", pause))
-    application.add_handler(CommandHandler("resume", resume))
-    application.add_handler(CommandHandler("stop", stop))
-    application.add_handler(CommandHandler("scheduletest", schedule_test))
-    application.add_handler(CommandHandler("stopschedule", stop_schedule))
-
-    max_retries = 3
-    retry_delay = 5
-    for attempt in range(max_retries):
+    while True:
         try:
+            application = Application.builder().token(API_TOKEN).post_init(post_init).build()
+
+            application.add_handler(MessageHandler(filters.Regex('^/$'), slash_command))
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(CommandHandler("seturl", set_url))
+            application.add_handler(CommandHandler("setattempts", set_attempts))
+            application.add_handler(CommandHandler("setid", set_id))
+            application.add_handler(CommandHandler("test", test))
+            application.add_handler(CommandHandler("pause", pause))
+            application.add_handler(CommandHandler("resume", resume))
+            application.add_handler(CommandHandler("stop", stop))
+            application.add_handler(CommandHandler("scheduletest", schedule_test))
+            application.add_handler(CommandHandler("stopschedule", stop_schedule))
+
+            logger.info("Starting polling")
             application.run_polling(timeout=10, poll_interval=1.0, drop_pending_updates=True)
-            break
-        except Conflict as e:
-            logger.error(f"Conflict error on attempt {attempt+1}: {e}")
-            if attempt < max_retries - 1:
-                logger.info(f"Retrying in {retry_delay} seconds...")
-                time.sleep(retry_delay)
-            else:
-                logger.error("Max retries reached. Exiting.")
-                raise
+            logger.warning("Polling stopped unexpectedly")
+        except (Conflict, NetworkError) as e:
+            logger.error(f"Error in polling: {e}")
+            time.sleep(5)
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+            time.sleep(5)
+        logger.info("Restarting polling...")
 
 # Run Flask and Telegram bot in separate threads
 def run_flask():
@@ -376,5 +376,6 @@ def run_flask():
 
 if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True  # Ensure Flask thread exits when main thread exits
     flask_thread.start()
     main()
