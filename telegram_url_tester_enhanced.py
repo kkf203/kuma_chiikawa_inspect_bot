@@ -352,7 +352,7 @@ async def post_init(application: Application):
     logger.info("Bot commands set")
 
 # Main function for Telegram bot
-async def main():
+async def run_bot():
     application = Application.builder().token(API_TOKEN).post_init(post_init).build()
 
     application.add_handler(MessageHandler(filters.Regex('^/$'), slash_command))
@@ -367,9 +367,22 @@ async def main():
     application.add_handler(CommandHandler("scheduletest", schedule_test))
     application.add_handler(CommandHandler("stopschedule", stop_schedule))
 
+    logger.info("Starting polling")
+    await application.run_polling(timeout=10, poll_interval=1.0, drop_pending_updates=True)
+
+# Run Flask and Telegram bot
+def run_flask():
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
+
+async def main():
+    # Start Flask in a separate thread
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+
+    # Run Telegram bot
     try:
-        logger.info("Starting polling")
-        await application.run_polling(timeout=10, poll_interval=1.0, drop_pending_updates=True)
+        await run_bot()
     except (Conflict, NetworkError) as e:
         logger.error(f"Error in polling: {e}")
         raise
@@ -377,15 +390,11 @@ async def main():
         logger.error(f"Unexpected error: {e}")
         raise
 
-# Run Flask and Telegram bot
-def run_flask():
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
-
 if __name__ == '__main__':
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
+    loop = asyncio.get_event_loop()
     try:
-        asyncio.run(main())
+        loop.run_until_complete(main())
     except Exception as e:
         logger.error(f"Main loop error: {e}")
+    finally:
+        loop.close()
