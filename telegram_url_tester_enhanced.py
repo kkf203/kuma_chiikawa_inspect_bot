@@ -33,19 +33,15 @@ scheduler = AsyncIOScheduler()
 
 # Webhook route for Telegram updates
 @app.route('/webhook', methods=['POST'])
-def webhook():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+async def webhook():
     try:
         update = Update.de_json(request.get_json(), application.bot)
         if update:
-            loop.run_until_complete(application.process_update(update))
+            await application.process_update(update)
         return jsonify({'status': 'ok'})
     except Exception as e:
         logger.error(f"Webhook processing error: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
-    finally:
-        loop.close()
 
 # Basic route to satisfy Render's port requirement
 @app.route('/')
@@ -381,9 +377,6 @@ async def init_application():
     await application.initialize()
     await set_webhook()
 
-# Run initialization in application context
 if __name__ == '__main__':
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(init_application())
+    asyncio.run(init_application())
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
