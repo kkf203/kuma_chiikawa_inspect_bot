@@ -20,12 +20,13 @@ logger = logging.getLogger(__name__)
 # Initialize Flask app
 app = Flask(__name__)
 
-# Initialize Telegram Application
+# Get Bot Token from environment variable
 API_TOKEN = os.getenv("BOT_TOKEN")
 if not API_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set")
 
-application = Application.builder().token(API_TOKEN).build()
+# Initialize Telegram Application
+application = Application.builder().token(API_TOKEN).post_init(post_init).build()
 
 # Initialize scheduler for timed tests
 scheduler = AsyncIOScheduler()
@@ -33,10 +34,14 @@ scheduler = AsyncIOScheduler()
 # Webhook route for Telegram updates
 @app.route('/webhook', methods=['POST'])
 async def webhook():
-    update = Update.de_json(request.get_json(), application.bot)
-    if update:
-        await application.process_update(update)
-    return jsonify({'status': 'ok'})
+    try:
+        update = Update.de_json(request.get_json(), application.bot)
+        if update:
+            await application.process_update(update)
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        logger.error(f"Webhook processing error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # Basic route to satisfy Render's port requirement
 @app.route('/')
@@ -107,7 +112,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/resume - 繼續測試\n"
         "/stop - 停止測試\n"
         "/scheduletest <日期> <時間> <時區> - 設定定時測試，例如 /scheduletest 2025-05-10 14:30 GMT\n"
-            "/stopschedule - 停止定時測試"
+        "/stopschedule - 停止定時測試"
     )
 
 # Set URL command
@@ -375,7 +380,7 @@ def setup_bot():
     application.add_handler(CommandHandler("scheduletest", schedule_test))
     application.add_handler(CommandHandler("stopschedule", stop_schedule))
 
-# Set webhook on startup
+# Set webhook
 async def set_webhook():
     webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/webhook"
     logger.info(f"Setting webhook to {webhook_url}")
@@ -384,11 +389,12 @@ async def set_webhook():
         logger.info("Webhook set successfully")
     except Exception as e:
         logger.error(f"Failed to set webhook: {e}")
+        raise
 
-# Initialize application and set webhook
+# Initialize application and set webhook at startup
+@app.before_first_request
 def init_application():
     setup_bot()
-    application.post_init(post_init)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -396,12 +402,9 @@ def init_application():
         loop.run_until_complete(set_webhook())
     except Exception as e:
         logger.error(f"Application initialization error: {e}")
+        raise
     finally:
         loop.close()
-
-# Start application at module level
-init_application()
-logger.info("Telegram bot initialized with webhook")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
