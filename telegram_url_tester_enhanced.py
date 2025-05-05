@@ -3,22 +3,15 @@ import aiohttp
 import asyncio
 import logging
 from datetime import datetime
-from bs4 import BeautifulSoup
+import pytz
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-from telegram.error import Conflict, NetworkError
-from flask import Flask, request, jsonify
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
-import pytz
-from asgiref.sync import sync_to_async
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Initialize Flask app
-app = Flask(__name__)
 
 # Get Bot Token from environment variable
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -30,29 +23,6 @@ application = Application.builder().token(API_TOKEN).build()
 
 # Initialize scheduler for timed tests
 scheduler = AsyncIOScheduler()
-
-# Webhook route for Telegram updates
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    try:
-        update = Update.de_json(request.get_json(), application.bot)
-        if update:
-            # Use sync_to_async to handle async processing
-            asyncio.run(application.process_update(update))
-        return jsonify({'status': 'ok'})
-    except Exception as e:
-        logger.error(f"Webhook processing error: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-# Basic route to satisfy Render's port requirement
-@app.route('/')
-def home():
-    return "Telegram Bot is running!"
-
-# Health check endpoint to prevent Render idle
-@app.route('/health')
-def health():
-    return "OK", 200
 
 # Function to check if a URL is valid with retry
 async def check_url(url, retries=3, timeout=10):
@@ -361,26 +331,26 @@ def setup_bot():
     application.add_handler(CommandHandler("scheduletest", schedule_test))
     application.add_handler(CommandHandler("stopschedule", stop_schedule))
 
-# Set webhook
-async def set_webhook():
+async def main():
+    # Setup bot handlers
+    setup_bot()
+    
+    # Start the scheduler
+    scheduler.start()
+
+    # Start the bot with webhook
+    port = int(os.getenv("PORT", 8080))
     webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/webhook"
     logger.info(f"Setting webhook to {webhook_url}")
-    try:
-        await application.bot.set_webhook(webhook_url)
-        logger.info("Webhook set successfully")
-    except Exception as e:
-        logger.error(f"Failed to set webhook: {e}")
-        raise
-
-# Initialize application and set webhook
-async def init_application():
-    setup_bot()
     await application.initialize()
-    await set_webhook()
+    await application.bot.set_webhook(webhook_url)
     await application.start()
+    await application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path="/webhook",
+        webhook_url=webhook_url
+    )
 
-if __name__ == '__main__':
-    # Run initialization in a separate thread or process managed by gunicorn
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(init_application())
+if __name__ == "__main__":
+    asyncio.run(main())
