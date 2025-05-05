@@ -367,18 +367,15 @@ async def main():
     application.add_handler(CommandHandler("scheduletest", schedule_test))
     application.add_handler(CommandHandler("stopschedule", stop_schedule))
 
-    while True:
-        try:
-            logger.info("Starting polling")
-            await application.run_polling(timeout=10, poll_interval=1.0, drop_pending_updates=True)
-            logger.warning("Polling stopped unexpectedly")
-        except (Conflict, NetworkError) as e:
-            logger.error(f"Error in polling: {e}")
-            await asyncio.sleep(5)
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            await asyncio.sleep(5)
-        logger.info("Restarting polling...")
+    try:
+        logger.info("Starting polling")
+        await application.run_polling(timeout=10, poll_interval=1.0, drop_pending_updates=True)
+    except (Conflict, NetworkError) as e:
+        logger.error(f"Error in polling: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        raise
 
 # Run Flask and Telegram bot
 def run_flask():
@@ -388,4 +385,7 @@ if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        logger.error(f"Main loop error: {e}")
