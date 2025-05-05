@@ -4,3 +4,4 @@ python-telegram-bot
 apscheduler
 pytz
 aiohttp
+uvicorn
