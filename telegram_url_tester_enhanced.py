@@ -27,18 +27,22 @@ application = Application.builder().token(API_TOKEN).build()
 scheduler = AsyncIOScheduler()
 
 # Function to check if a URL is valid with retry
-async def check_url(url, retries=3, timeout=10):
+async def check_url(url, retries=3, timeout=10, check_image=False):
     async with aiohttp.ClientSession() as session:
         for attempt in range(retries):
             try:
                 async with session.get(url, timeout=timeout) as response:
                     if response.status == 200:
                         content_type = response.headers.get('Content-Type', '').lower()
-                        # If the content is an image, consider it valid without decoding
+                        if check_image:
+                            # Only check if Content-Type is image/jpeg
+                            is_valid = 'image/jpeg' in content_type
+                            logger.info(f"URL {url} {'is' if is_valid else 'is not'} a JPEG image")
+                            return is_valid
+                        # Existing logic for non-image checks
                         if 'image' in content_type:
                             logger.info(f"URL {url} is a valid image")
                             return True
-                        # Otherwise, check the text content for error messages
                         text = await response.text()
                         if any(phrase in text for phrase in [
                             "The page you’re looking for couldn’t be found.",
@@ -73,7 +77,11 @@ async def slash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/resume - 繼續測試\n"
             "/stop - 停止測試\n"
             "/scheduletest <日期> <時間> <時區> - 設定定時測試，例如 /scheduletest 2025-05-10 14:30 GMT\n"
-            "/stopschedule - 停止定時測試"
+            "/stopschedule - 停止定時測試\n"
+            "/setimagelinks <網址1>,<網址2>,... - 設置多個圖片網址，例如 /setimagelinks https://example.com/1.jpg,https://example.com/2.jpg\n"
+            "/checkimages - 檢查圖片網址是否為 JPEG\n"
+            "/scheduleimagecheck - 每小時檢查圖片網址\n"
+            "/stopimagecheck - 停止每小時檢查"
         )
 
 # Start command
@@ -91,7 +99,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/resume - 繼續測試\n"
         "/stop - 停止測試\n"
         "/scheduletest <日期> <時間> <時區> - 設定定時測試，例如 /scheduletest 2025-05-10 14:30 GMT\n"
-        "/stopschedule - 停止定時測試"
+        "/stopschedule - 停止定時測試\n"
+        "/setimagelinks <網址1>,<網址2>,... - 設置多個圖片網址，例如 /setimagelinks https://example.com/1.jpg,https://example.com/2.jpg\n"
+        "/checkimages - 檢查圖片網址是否為 JPEG\n"
+        "/scheduleimagecheck - 每小時檢查圖片網址\n"
+        "/stopimagecheck - 停止每小時檢查"
     )
 
 # Set URL command
@@ -306,6 +318,87 @@ async def stop_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("沒有正在排程的定時測試。")
 
+# Set image links command
+async def set_image_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Received setimagelinks command")
+    if not context.args:
+        await update.message.reply_text("請提供網址列表！格式：/setimagelinks <網址1>,<網址2>,... 例如 /setimagelinks https://example.com/1.jpg,https://example.com/2.jpg")
+        return
+    links = context.args[0].split(',')
+    # Basic validation
+    valid_links = [link.strip() for link in links if link.strip().startswith('http')]
+    if not valid_links:
+        await update.message.reply_text("請提供有效的網址！")
+        return
+    context.user_data['image_links'] = valid_links
+    await update.message.reply_text(f"已設置 {len(valid_links)} 個網址：\n" + "\n".join(valid_links))
+
+# Check images command
+async def check_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Received checkimages command")
+    if 'image_links' not in context.user_data:
+        await update.message.reply_text("請先設置網址！使用 /setimagelinks")
+        return
+
+    valid_images = []
+    for url in context.user_data['image_links']:
+        if await check_url(url, check_image=True):
+            valid_images.append(url)
+
+    if valid_images:
+        await update.message.reply_text(
+            "檢查完成！以下是有效的 JPEG 圖片網址：\n" + "\n".join(valid_images)
+        )
+    else:
+        await update.message.reply_text("檢查完成，沒有找到有效的 JPEG 圖片網址。")
+
+# Schedule image check command
+async def schedule_image_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Received scheduleimagecheck command")
+    if 'image_links' not in context.user_data:
+        await update.message.reply_text("請先設置網址！使用 /setimagelinks")
+        return
+
+    context.user_data['image_check_chat_id'] = update.effective_chat.id
+    # Schedule hourly check
+    scheduler.add_job(
+        run_image_check,
+        'interval',
+        hours=1,
+        args=[context.user_data, context.bot],
+        id='image_check'
+    )
+    await update.message.reply_text("已設定每小時檢查圖片網址。使用 /stopimagecheck 停止。")
+
+# Run scheduled image check
+async def run_image_check(user_data, bot):
+    logger.info("Running scheduled image check")
+    valid_images = []
+    for url in user_data['image_links']:
+        if await check_url(url, check_image=True):
+            valid_images.append(url)
+
+    chat_id = user_data['image_check_chat_id']
+    if valid_images:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="定時檢查完成！以下是有效的 JPEG 圖片網址：\n" + "\n".join(valid_images)
+        )
+    else:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="定時檢查完成，沒有找到有效的 JPEG 圖片網址。"
+        )
+
+# Stop scheduled image check
+async def stop_image_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Received stopimagecheck command")
+    if scheduler.get_job('image_check'):
+        scheduler.remove_job('image_check')
+        await update.message.reply_text("已停止每小時檢查圖片網址。")
+    else:
+        await update.message.reply_text("沒有正在進行的定時圖片檢查。")
+
 # Setup Telegram bot handlers
 def setup_bot():
     application.add_handler(MessageHandler(filters.Regex('^/$'), slash_command))
@@ -319,6 +412,10 @@ def setup_bot():
     application.add_handler(CommandHandler("stop", stop))
     application.add_handler(CommandHandler("scheduletest", schedule_test))
     application.add_handler(CommandHandler("stopschedule", stop_schedule))
+    application.add_handler(CommandHandler("setimagelinks", set_image_links))
+    application.add_handler(CommandHandler("checkimages", check_images))
+    application.add_handler(CommandHandler("scheduleimagecheck", schedule_image_check))
+    application.add_handler(CommandHandler("stopimagecheck", stop_imagecheck))
 
 # Main coroutine to initialize the bot
 async def initialize_bot():
