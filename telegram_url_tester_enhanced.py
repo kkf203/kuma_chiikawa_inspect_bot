@@ -391,8 +391,7 @@ async def set_webhook():
         logger.error(f"Failed to set webhook: {e}")
         raise
 
-# Initialize application and set webhook at startup
-@app.before_first_request
+# Initialize application and set webhook
 def init_application():
     setup_bot()
     loop = asyncio.new_event_loop()
@@ -405,6 +404,10 @@ def init_application():
         raise
     finally:
         loop.close()
+
+# Run initialization in application context
+with app.app_context():
+    init_application()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
