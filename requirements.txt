@@ -6,4 +6,3 @@ apscheduler
 pytz
 aiohttp
 gunicorn
-uvicorn
