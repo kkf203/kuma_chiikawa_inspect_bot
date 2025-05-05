@@ -8,6 +8,9 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
+import uvicorn
+from telegram.ext import ApplicationHandler
+from telegram.request import HTTPXRequest
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -18,12 +21,12 @@ API_TOKEN = os.getenv("BOT_TOKEN")
 if not API_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set")
 
-# Initialize Telegram Application
-application = Application.builder().token(API_TOKEN).build()
+# Initialize Telegram Application with HTTPXRequest
+request = HTTPXRequest()
+application = Application.builder().token(API_TOKEN).request(request).build()
 
-# Initialize scheduler for timed tests, explicitly using the current event loop
-loop = asyncio.get_event_loop()
-scheduler = AsyncIOScheduler(event_loop=loop)
+# Initialize scheduler for timed tests
+scheduler = AsyncIOScheduler()
 
 # Function to check if a URL is valid with retry
 async def check_url(url, retries=3, timeout=10):
@@ -332,33 +335,21 @@ def setup_bot():
     application.add_handler(CommandHandler("scheduletest", schedule_test))
     application.add_handler(CommandHandler("stopschedule", stop_schedule))
 
-async def main(loop):
-    # Setup bot handlers
+# Create the ASGI application
+app = ApplicationHandler(application)
+
+# Main coroutine to initialize the bot
+async def initialize_bot():
     setup_bot()
-
-    # Start the scheduler
-    scheduler.start()
-    logger.info("Scheduler started successfully")
-
-    # Start the bot with webhook
-    port = int(os.getenv("PORT", 8080))
+    await application.initialize()
     webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/webhook"
     logger.info(f"Setting webhook to {webhook_url}")
-    
-    await application.initialize()
     await application.bot.set_webhook(webhook_url)
     await application.start()
-    logger.info("Application started successfully")
+    scheduler.start()
+    logger.info("Bot and scheduler started successfully")
 
-    # Run the webhook server
-    logger.info("Starting webhook server")
-    await application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path="/webhook",
-        webhook_url=webhook_url
-    )
-
+# Shutdown coroutine
 async def shutdown():
     logger.info("Shutting down application")
     await application.stop()
@@ -366,21 +357,27 @@ async def shutdown():
     await application.bot.delete_webhook()
     logger.info("Shutdown complete")
 
+# Uvicorn server configuration
 if __name__ == "__main__":
-    # Create a new event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
+    # Initialize the bot
+    loop = asyncio.get_event_loop()
     try:
-        # Run the main coroutine
-        loop.run_until_complete(main(loop))
+        loop.run_until_complete(initialize_bot())
+        # Run the uvicorn server
+        port = int(os.getenv("PORT", 8080))
+        config = uvicorn.Config(
+            app=app,
+            host="0.0.0.0",
+            port=port,
+            loop="asyncio",
+            log_level="info"
+        )
+        server = uvicorn.Server(config)
+        loop.run_until_complete(server.serve())
     except KeyboardInterrupt:
-        # Handle manual shutdown
         loop.run_until_complete(shutdown())
     except Exception as e:
-        # Log any other exceptions and ensure proper shutdown
         logger.error(f"Unexpected error: {e}")
         loop.run_until_complete(shutdown())
     finally:
-        # Ensure the loop is closed
         loop.close()
