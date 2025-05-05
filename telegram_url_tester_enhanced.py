@@ -415,7 +415,7 @@ def setup_bot():
     application.add_handler(CommandHandler("setimagelinks", set_image_links))
     application.add_handler(CommandHandler("checkimages", check_images))
     application.add_handler(CommandHandler("scheduleimagecheck", schedule_image_check))
-    application.add_handler(CommandHandler("stopimagecheck", stop_imagecheck))
+    application.add_handler(CommandHandler("stopimagecheck", stop_image_check))
 
 # Main coroutine to initialize the bot
 async def initialize_bot():
