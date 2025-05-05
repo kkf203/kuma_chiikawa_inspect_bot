@@ -393,15 +393,11 @@ def start_bot_thread():
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
 
-# Start Telegram bot when Flask app is loaded
-@app.before_first_request
-def start_bot():
-    bot_thread = threading.Thread(target=start_bot_thread, daemon=True)
-    bot_thread.start()
-    logger.info("Started Telegram bot thread")
+# Start Telegram bot thread at module level
+bot_thread = threading.Thread(target=start_bot_thread, daemon=True)
+bot_thread.start()
+logger.info("Started Telegram bot thread")
 
 if __name__ == '__main__':
     # For local testing, run Flask and bot together
-    bot_thread = threading.Thread(target=start_bot_thread, daemon=True)
-    bot_thread.start()
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
