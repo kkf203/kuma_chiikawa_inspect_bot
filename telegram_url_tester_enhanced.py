@@ -45,7 +45,9 @@ API_TOKEN = os.getenv("BOT_TOKEN")
 if not API_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set")
 
-# Initialize Telegram Application
+# Initialize Telegram Application with global event loop
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 application = Application.builder().token(API_TOKEN).post_init(post_init).build()
 
 # Initialize scheduler for timed tests
@@ -392,22 +394,13 @@ async def set_webhook():
         raise
 
 # Initialize application and set webhook
-def init_application():
+async def init_application():
     setup_bot()
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(application.initialize())
-        loop.run_until_complete(set_webhook())
-    except Exception as e:
-        logger.error(f"Application initialization error: {e}")
-        raise
-    finally:
-        loop.close()
+    await application.initialize()
+    await set_webhook()
 
 # Run initialization in application context
-with app.app_context():
-    init_application()
+loop.run_until_complete(init_application())
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
