@@ -1,7 +1,7 @@
 requests
 beautifulsoup4
 python-telegram-bot
-flask
+flask[async]
 apscheduler
 pytz
 aiohttp
