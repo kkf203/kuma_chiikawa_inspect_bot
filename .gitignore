@@ -1,3 +1,23 @@
+# macOS
 .DS_Store
+
+# Python
+__pycache__/
 *.pyc
-pycache/
+
+# Project-specific
+*.png
+*.jpg
+*.json
+*.html
+*.js
+*.pkl
+buy_bot*.py
+login_buy_bot*.py
+test_*.py
+update_cookies.py
+url_tester.py
+telegram_url_tester.py
+telegram_url_tester_enhanced0.py
+view-source_*.html
+~/
