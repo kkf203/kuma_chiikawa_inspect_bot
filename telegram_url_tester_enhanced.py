@@ -2,6 +2,7 @@ import os
 import aiohttp
 import asyncio
 import logging
+import multiprocessing
 from datetime import datetime
 from bs4 import BeautifulSoup
 from telegram import Update, BotCommand
@@ -380,21 +381,25 @@ async def run_bot():
         await application.stop()
         await application.shutdown()
 
-# Start Telegram bot in gunicorn post_fork hook
-def post_fork(server, worker):
+# Run Telegram bot in a separate process
+def start_bot_process():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(run_bot())
     except Exception as e:
-        logger.error(f"Bot post_fork error: {e}")
+        logger.error(f"Bot process error: {e}")
     finally:
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
 
+# Start Telegram bot process at module level
+bot_process = multiprocessing.Process(target=start_bot_process, daemon=True)
+bot_process.start()
+logger.info("Started Telegram bot process")
+
 if __name__ == '__main__':
     # For local testing, run Flask and bot together
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_bot())
+    bot_process = multiprocessing.Process(target=start_bot_process, daemon=True)
+    bot_process.start()
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
