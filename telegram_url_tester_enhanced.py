@@ -17,6 +17,26 @@ import json
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Post-init callback to start scheduler and set bot commands
+async def post_init(application: Application):
+    logger.info("Starting scheduler and setting bot commands in post_init")
+    scheduler.start()
+
+    commands = [
+        BotCommand("start", "顯示歡迎訊息"),
+        BotCommand("seturl", "設置網址模板，例如 /seturl https://chiikawamarket.jp/cdn/shop/files/{}_1.jpg"),
+        BotCommand("setattempts", "設置測試次數，例如 /setattempts 10"),
+        BotCommand("setid", "設置初始數字，例如 /setid 4571609355900"),
+        BotCommand("test", "開始測試"),
+        BotCommand("pause", "暫停測試"),
+        BotCommand("resume", "繼續測試"),
+        BotCommand("stop", "停止測試"),
+        BotCommand("scheduletest", "設定定時測試，例如 /scheduletest 2025-05-10 14:30 GMT"),
+        BotCommand("stopschedule", "停止定時測試")
+    ]
+    await application.bot.set_my_commands(commands)
+    logger.info("Bot commands set")
+
 # Initialize Flask app
 app = Flask(__name__)
 
@@ -345,26 +365,6 @@ async def stop_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("定時測試已取消。")
     else:
         await update.message.reply_text("沒有正在排程的定時測試。")
-
-# Post-init callback to start scheduler and set bot commands
-async def post_init(application: Application):
-    logger.info("Starting scheduler and setting bot commands in post_init")
-    scheduler.start()
-
-    commands = [
-        BotCommand("start", "顯示歡迎訊息"),
-        BotCommand("seturl", "設置網址模板，例如 /seturl https://chiikawamarket.jp/cdn/shop/files/{}_1.jpg"),
-        BotCommand("setattempts", "設置測試次數，例如 /setattempts 10"),
-        BotCommand("setid", "設置初始數字，例如 /setid 4571609355900"),
-        BotCommand("test", "開始測試"),
-        BotCommand("pause", "暫停測試"),
-        BotCommand("resume", "繼續測試"),
-        BotCommand("stop", "停止測試"),
-        BotCommand("scheduletest", "設定定時測試，例如 /scheduletest 2025-05-10 14:30 GMT"),
-        BotCommand("stopschedule", "停止定時測試")
-    ]
-    await application.bot.set_my_commands(commands)
-    logger.info("Bot commands set")
 
 # Setup Telegram bot handlers
 def setup_bot():
