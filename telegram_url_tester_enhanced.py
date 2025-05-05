@@ -21,8 +21,9 @@ if not API_TOKEN:
 # Initialize Telegram Application
 application = Application.builder().token(API_TOKEN).build()
 
-# Initialize scheduler for timed tests
-scheduler = AsyncIOScheduler()
+# Initialize scheduler for timed tests, explicitly using the current event loop
+loop = asyncio.get_event_loop()
+scheduler = AsyncIOScheduler(event_loop=loop)
 
 # Function to check if a URL is valid with retry
 async def check_url(url, retries=3, timeout=10):
@@ -331,9 +332,13 @@ def setup_bot():
     application.add_handler(CommandHandler("scheduletest", schedule_test))
     application.add_handler(CommandHandler("stopschedule", stop_schedule))
 
-async def main():
+async def main(loop):
     # Setup bot handlers
     setup_bot()
+
+    # Start the scheduler
+    scheduler.start()
+    logger.info("Scheduler started successfully")
 
     # Start the bot with webhook
     port = int(os.getenv("PORT", 8080))
@@ -343,30 +348,39 @@ async def main():
     await application.initialize()
     await application.bot.set_webhook(webhook_url)
     await application.start()
-    
-    # Start the scheduler after application is initialized
-    scheduler.start()
+    logger.info("Application started successfully")
 
-    try:
-        await application.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path="/webhook",
-            webhook_url=webhook_url
-        )
-    finally:
-        # Ensure proper cleanup
-        await application.stop()
-        scheduler.shutdown()
-        await application.bot.delete_webhook()
+    # Run the webhook server
+    logger.info("Starting webhook server")
+    await application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path="/webhook",
+        webhook_url=webhook_url
+    )
+
+async def shutdown():
+    logger.info("Shutting down application")
+    await application.stop()
+    scheduler.shutdown()
+    await application.bot.delete_webhook()
+    logger.info("Shutdown complete")
 
 if __name__ == "__main__":
-    # Create a single event loop
-    loop = asyncio.get_event_loop()
-    
-    # Run the main coroutine
+    # Create a new event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     try:
-        loop.run_until_complete(main())
+        # Run the main coroutine
+        loop.run_until_complete(main(loop))
+    except KeyboardInterrupt:
+        # Handle manual shutdown
+        loop.run_until_complete(shutdown())
+    except Exception as e:
+        # Log any other exceptions and ensure proper shutdown
+        logger.error(f"Unexpected error: {e}")
+        loop.run_until_complete(shutdown())
     finally:
-        # Ensure the loop is closed properly
+        # Ensure the loop is closed
         loop.close()
