@@ -9,8 +9,6 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 import uvicorn
-from telegram.ext import ApplicationHandler
-from telegram.request import HTTPXRequest
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -21,9 +19,8 @@ API_TOKEN = os.getenv("BOT_TOKEN")
 if not API_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set")
 
-# Initialize Telegram Application with HTTPXRequest
-request = HTTPXRequest()
-application = Application.builder().token(API_TOKEN).request(request).build()
+# Initialize Telegram Application
+application = Application.builder().token(API_TOKEN).build()
 
 # Initialize scheduler for timed tests
 scheduler = AsyncIOScheduler()
@@ -335,9 +332,6 @@ def setup_bot():
     application.add_handler(CommandHandler("scheduletest", schedule_test))
     application.add_handler(CommandHandler("stopschedule", stop_schedule))
 
-# Create the ASGI application
-app = ApplicationHandler(application)
-
 # Main coroutine to initialize the bot
 async def initialize_bot():
     setup_bot()
@@ -357,13 +351,16 @@ async def shutdown():
     await application.bot.delete_webhook()
     logger.info("Shutdown complete")
 
-# Uvicorn server configuration
+# Uvicorn ASGI application
+async def app(scope, receive, send):
+    assert scope['type'] == 'http'
+    await application.process_update(await receive())
+
+# Main execution
 if __name__ == "__main__":
-    # Initialize the bot
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(initialize_bot())
-        # Run the uvicorn server
         port = int(os.getenv("PORT", 8080))
         config = uvicorn.Config(
             app=app,
