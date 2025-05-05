@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime
 from bs4 import BeautifulSoup
-from telegram import Update, BotCommand
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.error import Conflict, NetworkError
 from flask import Flask, request, jsonify
@@ -17,26 +17,6 @@ import json
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Post-init callback to start scheduler and set bot commands
-async def post_init(application: Application):
-    logger.info("Starting scheduler and setting bot commands in post_init")
-    scheduler.start()
-
-    commands = [
-        BotCommand("start", "顯示歡迎訊息"),
-        BotCommand("seturl", "設置網址模板，例如 /seturl https://chiikawamarket.jp/cdn/shop/files/{}_1.jpg"),
-        BotCommand("setattempts", "設置測試次數，例如 /setattempts 10"),
-        BotCommand("setid", "設置初始數字，例如 /setid 4571609355900"),
-        BotCommand("test", "開始測試"),
-        BotCommand("pause", "暫停測試"),
-        BotCommand("resume", "繼續測試"),
-        BotCommand("stop", "停止測試"),
-        BotCommand("scheduletest", "設定定時測試，例如 /scheduletest 2025-05-10 14:30 GMT"),
-        BotCommand("stopschedule", "停止定時測試")
-    ]
-    await application.bot.set_my_commands(commands)
-    logger.info("Bot commands set")
-
 # Initialize Flask app
 app = Flask(__name__)
 
@@ -45,25 +25,27 @@ API_TOKEN = os.getenv("BOT_TOKEN")
 if not API_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set")
 
-# Initialize Telegram Application with global event loop
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-application = Application.builder().token(API_TOKEN).post_init(post_init).build()
+# Initialize Telegram Application
+application = Application.builder().token(API_TOKEN).build()
 
 # Initialize scheduler for timed tests
 scheduler = AsyncIOScheduler()
 
 # Webhook route for Telegram updates
 @app.route('/webhook', methods=['POST'])
-async def webhook():
+def webhook():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         update = Update.de_json(request.get_json(), application.bot)
         if update:
-            await application.process_update(update)
+            loop.run_until_complete(application.process_update(update))
         return jsonify({'status': 'ok'})
     except Exception as e:
         logger.error(f"Webhook processing error: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        loop.close()
 
 # Basic route to satisfy Render's port requirement
 @app.route('/')
@@ -400,7 +382,8 @@ async def init_application():
     await set_webhook()
 
 # Run initialization in application context
-loop.run_until_complete(init_application())
-
 if __name__ == '__main__':
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_application())
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
