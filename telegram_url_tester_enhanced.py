@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 import pytz
-import json
+from asgiref.sync import sync_to_async
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -37,13 +37,8 @@ def webhook():
     try:
         update = Update.de_json(request.get_json(), application.bot)
         if update:
-            # Create a new event loop for this request
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(application.process_update(update))
-            finally:
-                loop.close()
+            # Use sync_to_async to handle async processing
+            asyncio.run(application.process_update(update))
         return jsonify({'status': 'ok'})
     except Exception as e:
         logger.error(f"Webhook processing error: {e}")
@@ -384,6 +379,8 @@ async def init_application():
     await set_webhook()
     await application.start()
 
-# Ensure the application is initialized before gunicorn starts
-loop = asyncio.get_event_loop()
-loop.run_until_complete(init_application())
+if __name__ == '__main__':
+    # Run initialization in a separate thread or process managed by gunicorn
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_application())
