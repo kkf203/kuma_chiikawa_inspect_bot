@@ -33,6 +33,12 @@ async def check_url(url, retries=3, timeout=10):
             try:
                 async with session.get(url, timeout=timeout) as response:
                     if response.status == 200:
+                        content_type = response.headers.get('Content-Type', '').lower()
+                        # If the content is an image, consider it valid without decoding
+                        if 'image' in content_type:
+                            logger.info(f"URL {url} is a valid image")
+                            return True
+                        # Otherwise, check the text content for error messages
                         text = await response.text()
                         if any(phrase in text for phrase in [
                             "The page you’re looking for couldn’t be found.",
@@ -151,17 +157,6 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 if await check_url(test_url):
                     context.user_data['valid_urls'].append(test_url)
-                    await update.message.reply_text(
-                        f"嘗試 {i+1}: 數字 = {current_number}\n"
-                        f"網址 = {test_url}\n"
-                        f"結果: 有效"
-                    )
-                else:
-                    await update.message.reply_text(
-                        f"嘗試 {i+1}: 數字 = {current_number}\n"
-                        f"網址 = {test_url}\n"
-                        f"結果: 無效"
-                    )
                 await asyncio.sleep(1)
 
                 if (i + 1) % 10 == 0:
@@ -281,14 +276,6 @@ async def run_scheduled_test(user_data, bot):
 
             if await check_url(test_url):
                 valid_urls.append(test_url)
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=(
-                        f"定時測試 - 嘗試 {i+1}: 數字 = {current_number}\n"
-                        f"網址 = {test_url}\n"
-                        f"結果: 有效"
-                    )
-                )
             await asyncio.sleep(1)
 
             if (i + 1) % 10 == 0:
