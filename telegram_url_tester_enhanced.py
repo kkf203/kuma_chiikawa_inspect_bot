@@ -34,18 +34,20 @@ scheduler = AsyncIOScheduler()
 # Webhook route for Telegram updates
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
         update = Update.de_json(request.get_json(), application.bot)
         if update:
-            loop.run_until_complete(application.process_update(update))
+            # Create a new event loop for this request
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(application.process_update(update))
+            finally:
+                loop.close()
         return jsonify({'status': 'ok'})
     except Exception as e:
         logger.error(f"Webhook processing error: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
-    finally:
-        loop.close()
 
 # Basic route to satisfy Render's port requirement
 @app.route('/')
@@ -376,12 +378,12 @@ async def set_webhook():
         raise
 
 # Initialize application and set webhook
-def init_application():
+async def init_application():
     setup_bot()
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(set_webhook())
-    loop.close()
+    await application.initialize()
+    await set_webhook()
+    await application.start()
 
-if __name__ == '__main__':
-    init_application()
+# Ensure the application is initialized before gunicorn starts
+loop = asyncio.get_event_loop()
+loop.run_until_complete(init_application())
