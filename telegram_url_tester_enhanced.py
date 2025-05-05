@@ -8,7 +8,6 @@ from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.error import Conflict, NetworkError
 from flask import Flask
-import threading
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 import pytz
@@ -351,7 +350,7 @@ async def post_init(application: Application):
     await application.bot.set_my_commands(commands)
     logger.info("Bot commands set")
 
-# Main function for Telegram bot
+# Setup and run Telegram bot
 async def run_bot():
     application = Application.builder().token(API_TOKEN).post_init(post_init).build()
 
@@ -368,33 +367,36 @@ async def run_bot():
     application.add_handler(CommandHandler("stopschedule", stop_schedule))
 
     logger.info("Starting polling")
-    await application.run_polling(timeout=10, poll_interval=1.0, drop_pending_updates=True)
-
-# Run Flask and Telegram bot
-def run_flask():
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
-
-async def main():
-    # Start Flask in a separate thread
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-
-    # Run Telegram bot
     try:
-        await run_bot()
+        await application.run_polling(timeout=10, poll_interval=1.0, drop_pending_updates=True)
     except (Conflict, NetworkError) as e:
         logger.error(f"Error in polling: {e}")
         raise
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         raise
+    finally:
+        logger.info("Shutting down application")
+        await application.stop()
+        await application.shutdown()
 
-if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
+# Main coroutine to run both Flask and Telegram bot
+async def main():
+    # Start Telegram bot
+    bot_task = asyncio.create_task(run_bot())
+
+    # Wait for tasks to complete
     try:
-        loop.run_until_complete(main())
+        await bot_task
     except Exception as e:
         logger.error(f"Main loop error: {e}")
+
+if __name__ == '__main__':
+    # Create and run event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(main())
     finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
