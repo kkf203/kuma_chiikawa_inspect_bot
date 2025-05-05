@@ -2,6 +2,7 @@ import os
 import aiohttp
 import asyncio
 import logging
+import threading
 from datetime import datetime
 from bs4 import BeautifulSoup
 from telegram import Update, BotCommand
@@ -380,23 +381,27 @@ async def run_bot():
         await application.stop()
         await application.shutdown()
 
-# Main coroutine to run both Flask and Telegram bot
-async def main():
-    # Start Telegram bot
-    bot_task = asyncio.create_task(run_bot())
-
-    # Wait for tasks to complete
-    try:
-        await bot_task
-    except Exception as e:
-        logger.error(f"Main loop error: {e}")
-
-if __name__ == '__main__':
-    # Create and run event loop
+# Run Telegram bot in a separate thread
+def start_bot_thread():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(main())
+        loop.run_until_complete(run_bot())
+    except Exception as e:
+        logger.error(f"Bot thread error: {e}")
     finally:
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
+
+# Start Telegram bot when Flask app is loaded
+@app.before_first_request
+def start_bot():
+    bot_thread = threading.Thread(target=start_bot_thread, daemon=True)
+    bot_thread.start()
+    logger.info("Started Telegram bot thread")
+
+if __name__ == '__main__':
+    # For local testing, run Flask and bot together
+    bot_thread = threading.Thread(target=start_bot_thread, daemon=True)
+    bot_thread.start()
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
