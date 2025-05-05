@@ -334,23 +334,39 @@ def setup_bot():
 async def main():
     # Setup bot handlers
     setup_bot()
-    
-    # Start the scheduler
-    scheduler.start()
 
     # Start the bot with webhook
     port = int(os.getenv("PORT", 8080))
     webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/webhook"
     logger.info(f"Setting webhook to {webhook_url}")
+    
     await application.initialize()
     await application.bot.set_webhook(webhook_url)
     await application.start()
-    await application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path="/webhook",
-        webhook_url=webhook_url
-    )
+    
+    # Start the scheduler after application is initialized
+    scheduler.start()
+
+    try:
+        await application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path="/webhook",
+            webhook_url=webhook_url
+        )
+    finally:
+        # Ensure proper cleanup
+        await application.stop()
+        scheduler.shutdown()
+        await application.bot.delete_webhook()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Create a single event loop
+    loop = asyncio.get_event_loop()
+    
+    # Run the main coroutine
+    try:
+        loop.run_until_complete(main())
+    finally:
+        # Ensure the loop is closed properly
+        loop.close()
