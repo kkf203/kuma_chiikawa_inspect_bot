@@ -1,5 +1,5 @@
 import os
-import requests
+import aiohttp
 import asyncio
 import logging
 from datetime import datetime
@@ -12,7 +12,6 @@ import threading
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 import pytz
-import time
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -40,28 +39,30 @@ if not API_TOKEN:
 scheduler = AsyncIOScheduler()
 
 # Function to check if a URL is valid with retry
-def check_url(url, retries=3, timeout=10):
-    for attempt in range(retries):
-        try:
-            response = requests.get(url, timeout=timeout)
-            if response.status_code == 200:
-                if any(phrase in response.text for phrase in [
-                    "The page you’re looking for couldn’t be found.",
-                    "Not Found",
-                    "404error"
-                ]):
-                    logger.info(f"URL {url} invalid due to error message in content")
+async def check_url(url, retries=3, timeout=10):
+    async with aiohttp.ClientSession() as session:
+        for attempt in range(retries):
+            try:
+                async with session.get(url, timeout=timeout) as response:
+                    if response.status == 200:
+                        text = await response.text()
+                        if any(phrase in text for phrase in [
+                            "The page you’re looking for couldn’t be found.",
+                            "Not Found",
+                            "404error"
+                        ]):
+                            logger.info(f"URL {url} invalid due to error message in content")
+                            return False
+                        return True
+                    logger.info(f"URL {url} invalid, status code: {response.status}")
                     return False
-                return True
-            logger.info(f"URL {url} invalid, status code: {response.status_code}")
-            return False
-        except requests.RequestException as e:
-            logger.error(f"Attempt {attempt+1} failed for URL {url}: {e}")
-            if attempt < retries - 1:
-                time.sleep(1)
-            continue
-    logger.error(f"URL {url} failed after {retries} attempts")
-    return False
+            except Exception as e:
+                logger.error(f"Attempt {attempt+1} failed for URL {url}: {e}")
+                if attempt < retries - 1:
+                    await asyncio.sleep(1)
+                continue
+        logger.error(f"URL {url} failed after {retries} attempts")
+        return False
 
 # Command to handle standalone "/"
 async def slash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -160,15 +161,19 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 test_url = url_template.format(current_number)
                 logger.info(f"Testing URL {test_url}")
 
-                if check_url(test_url):
+                if await check_url(test_url):
                     context.user_data['valid_urls'].append(test_url)
                     await update.message.reply_text(
                         f"嘗試 {i+1}: 數字 = {current_number}\n"
                         f"網址 = {test_url}\n"
                         f"結果: 有效"
                     )
-                    await asyncio.sleep(1)
-
+                else:
+                    await update.message.reply_text(
+                        f"嘗試 {i+1}: 數字 = {current_number}\n"
+                        f"網址 = {test_url}\n"
+                        f"結果: 無效"
+                    )
                 await asyncio.sleep(1)
 
                 if (i + 1) % 10 == 0:
@@ -286,7 +291,7 @@ async def run_scheduled_test(user_data, bot):
             test_url = url_template.format(current_number)
             logger.info(f"Scheduled test: Testing URL {test_url}")
 
-            if check_url(test_url):
+            if await check_url(test_url):
                 valid_urls.append(test_url)
                 await bot.send_message(
                     chat_id=chat_id,
@@ -296,8 +301,6 @@ async def run_scheduled_test(user_data, bot):
                         f"結果: 有效"
                     )
                 )
-                await asyncio.sleep(1)
-
             await asyncio.sleep(1)
 
             if (i + 1) % 10 == 0:
@@ -348,36 +351,36 @@ async def post_init(application: Application):
     await application.bot.set_my_commands(commands)
     logger.info("Bot commands set")
 
-# Main function for Telegram bot with restart logic
-def main():
+# Main function for Telegram bot
+async def main():
+    application = Application.builder().token(API_TOKEN).post_init(post_init).build()
+
+    application.add_handler(MessageHandler(filters.Regex('^/$'), slash_command))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("seturl", set_url))
+    application.add_handler(CommandHandler("setattempts", set_attempts))
+    application.add_handler(CommandHandler("setid", set_id))
+    application.add_handler(CommandHandler("test", test))
+    application.add_handler(CommandHandler("pause", pause))
+    application.add_handler(CommandHandler("resume", resume))
+    application.add_handler(CommandHandler("stop", stop))
+    application.add_handler(CommandHandler("scheduletest", schedule_test))
+    application.add_handler(CommandHandler("stopschedule", stop_schedule))
+
     while True:
         try:
-            application = Application.builder().token(API_TOKEN).post_init(post_init).build()
-
-            application.add_handler(MessageHandler(filters.Regex('^/$'), slash_command))
-            application.add_handler(CommandHandler("start", start))
-            application.add_handler(CommandHandler("seturl", set_url))
-            application.add_handler(CommandHandler("setattempts", set_attempts))
-            application.add_handler(CommandHandler("setid", set_id))
-            application.add_handler(CommandHandler("test", test))
-            application.add_handler(CommandHandler("pause", pause))
-            application.add_handler(CommandHandler("resume", resume))
-            application.add_handler(CommandHandler("stop", stop))
-            application.add_handler(CommandHandler("scheduletest", schedule_test))
-            application.add_handler(CommandHandler("stopschedule", stop_schedule))
-
             logger.info("Starting polling")
-            application.run_polling(timeout=10, poll_interval=1.0, drop_pending_updates=True)
+            await application.run_polling(timeout=10, poll_interval=1.0, drop_pending_updates=True)
             logger.warning("Polling stopped unexpectedly")
         except (Conflict, NetworkError) as e:
             logger.error(f"Error in polling: {e}")
-            time.sleep(5)
+            await asyncio.sleep(5)
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
-            time.sleep(5)
+            await asyncio.sleep(5)
         logger.info("Restarting polling...")
 
-# Run Flask and Telegram bot in separate threads
+# Run Flask and Telegram bot
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
 
@@ -385,4 +388,4 @@ if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
-    main()
+    asyncio.run(main())
