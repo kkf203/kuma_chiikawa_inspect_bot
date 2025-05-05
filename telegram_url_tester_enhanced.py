@@ -2,6 +2,7 @@ import os
 import aiohttp
 import asyncio
 import logging
+import json
 from datetime import datetime
 import pytz
 from telegram import Update
@@ -353,8 +354,73 @@ async def shutdown():
 
 # Uvicorn ASGI application
 async def app(scope, receive, send):
-    assert scope['type'] == 'http'
-    await application.process_update(await receive())
+    if scope['type'] != 'http':
+        return
+
+    # Check if the path is correct
+    if scope['path'] != '/webhook':
+        await send({
+            'type': 'http.response.start',
+            'status': 404,
+            'headers': [[b'content-type', b'text/plain']],
+        })
+        await send({
+            'type': 'http.response.body',
+            'body': b'Not Found',
+        })
+        return
+
+    # Check if the method is POST
+    if scope['method'] != 'POST':
+        await send({
+            'type': 'http.response.start',
+            'status': 405,
+            'headers': [[b'content-type', b'text/plain']],
+        })
+        await send({
+            'type': 'http.response.body',
+            'body': b'Method Not Allowed',
+        })
+        return
+
+    try:
+        # Receive the request body
+        body = b''
+        more_body = True
+        while more_body:
+            message = await receive()
+            body += message.get('body', b'')
+            more_body = message.get('more_body', False)
+
+        # Parse the JSON body
+        update_dict = json.loads(body.decode('utf-8'))
+        update = Update.de_json(update_dict, application.bot)
+
+        # Process the update
+        await application.process_update(update)
+
+        # Send success response
+        await send({
+            'type': 'http.response.start',
+            'status': 200,
+            'headers': [[b'content-type', b'text/plain']],
+        })
+        await send({
+            'type': 'http.response.body',
+            'body': b'OK',
+        })
+
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        await send({
+            'type': 'http.response.start',
+            'status': 500,
+            'headers': [[b'content-type', b'text/plain']],
+        })
+        await send({
+            'type': 'http.response.body',
+            'body': b'Internal Server Error',
+        })
 
 # Main execution
 if __name__ == "__main__":
