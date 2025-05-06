@@ -5,7 +5,7 @@ import logging
 import json
 from datetime import datetime
 import pytz
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
@@ -67,7 +67,11 @@ async def slash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received slash command")
     if update.message.text == "/":
         await update.message.reply_text(
+            "歡迎使用增強版 URL 測試機器人！\n"
+            "\n"
             "可用命令：\n"
+            "\n"
+            "基本功能：\n"
             "/start - 顯示歡迎訊息\n"
             "/seturl <網址> - 設置網址模板，例如 /seturl https://chiikawamarket.jp/cdn/shop/files/{}_1.jpg\n"
             "/setattempts <次數> - 設置測試次數，例如 /setattempts 10\n"
@@ -78,10 +82,14 @@ async def slash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/stop - 停止測試\n"
             "/scheduletest <日期> <時間> <時區> - 設定定時測試，例如 /scheduletest 2025-05-10 14:30 GMT\n"
             "/stopschedule - 停止定時測試\n"
+            "\n"
+            "---\n"
+            "\n"
+            "圖片檢查功能：\n"
             "/setimagelinks <網址1>,<網址2>,... - 設置多個圖片網址，例如 /setimagelinks https://example.com/1.jpg,https://example.com/2.jpg\n"
             "/checkimages - 檢查圖片網址是否為 JPEG\n"
             "/scheduleimagecheck - 每小時檢查圖片網址\n"
-            "/stopimagecheck - 停止每小時檢查"
+            "/stopimagecheck - 停止每小時檢查\n"
         )
 
 # Start command
@@ -89,7 +97,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received start command")
     await update.message.reply_text(
         "歡迎使用增強版 URL 測試機器人！\n"
+        "\n"
         "可用命令：\n"
+        "\n"
+        "基本功能：\n"
         "/start - 顯示歡迎訊息\n"
         "/seturl <網址> - 設置網址模板，例如 /seturl https://chiikawamarket.jp/cdn/shop/files/{}_1.jpg\n"
         "/setattempts <次數> - 設置測試次數，例如 /setattempts 10\n"
@@ -100,10 +111,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/stop - 停止測試\n"
         "/scheduletest <日期> <時間> <時區> - 設定定時測試，例如 /scheduletest 2025-05-10 14:30 GMT\n"
         "/stopschedule - 停止定時測試\n"
+        "\n"
+        "---\n"
+        "\n"
+        "圖片檢查功能：\n"
         "/setimagelinks <網址1>,<網址2>,... - 設置多個圖片網址，例如 /setimagelinks https://example.com/1.jpg,https://example.com/2.jpg\n"
         "/checkimages - 檢查圖片網址是否為 JPEG\n"
         "/scheduleimagecheck - 每小時檢查圖片網址\n"
-        "/stopimagecheck - 停止每小時檢查"
+        "/stopimagecheck - 停止每小時檢查\n"
     )
 
 # Set URL command
@@ -421,6 +436,27 @@ def setup_bot():
 async def initialize_bot():
     setup_bot()
     await application.initialize()
+
+    # Set Telegram bot commands for the menu
+    commands = [
+        BotCommand("start", "顯示歡迎訊息"),
+        BotCommand("seturl", "設置網址模板，例如 /seturl https://chiikawamarket.jp/cdn/shop/files/{}_1.jpg"),
+        BotCommand("setattempts", "設置測試次數，例如 /setattempts 10"),
+        BotCommand("setid", "設置初始數字，例如 /setid 4571609355900"),
+        BotCommand("test", "開始測試"),
+        BotCommand("pause", "暫停測試"),
+        BotCommand("resume", "繼續測試"),
+        BotCommand("stop", "停止測試"),
+        BotCommand("scheduletest", "設定定時測試，例如 /scheduletest 2025-05-10 14:30 GMT"),
+        BotCommand("stopschedule", "停止定時測試"),
+        BotCommand("setimagelinks", "設置多個圖片網址，例如 /setimagelinks https://example.com/1.jpg,https://example.com/2.jpg"),
+        BotCommand("checkimages", "檢查圖片網址是否為 JPEG"),
+        BotCommand("scheduleimagecheck", "每小時檢查圖片網址"),
+        BotCommand("stopimagecheck", "停止每小時檢查"),
+    ]
+    await application.bot.set_my_commands(commands)
+    logger.info("Telegram bot commands set successfully")
+
     webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/webhook"
     logger.info(f"Setting webhook to {webhook_url}")
     await application.bot.set_webhook(webhook_url)
