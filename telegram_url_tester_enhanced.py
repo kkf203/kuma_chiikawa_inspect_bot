@@ -26,6 +26,34 @@ application = Application.builder().token(API_TOKEN).build()
 # Initialize scheduler for timed tests
 scheduler = AsyncIOScheduler()
 
+# File to store test state
+STATE_FILE = "test_state.json"
+
+# Function to save test state to file
+def save_test_state(user_data):
+    state = {
+        'testing': user_data.get('testing', False),
+        'paused': user_data.get('paused', False),
+        'url': user_data.get('url', ''),
+        'attempts': user_data.get('attempts', 0),
+        'initial_number': user_data.get('initial_number', 4571609355900),
+        'current_index': user_data.get('current_index', 0),
+        'valid_urls': user_data.get('valid_urls', [])
+    }
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f)
+
+# Function to load test state from file
+def load_test_state(user_data):
+    try:
+        with open(STATE_FILE, 'r') as f:
+            state = json.load(f)
+        user_data.update(state)
+    except FileNotFoundError:
+        logger.info("No previous test state found")
+    except Exception as e:
+        logger.error(f"Error loading test state: {e}")
+
 # Function to check if a URL is valid with retry
 async def check_url(url, retries=3, timeout=10, check_image=False):
     async with aiohttp.ClientSession() as session:
@@ -35,11 +63,9 @@ async def check_url(url, retries=3, timeout=10, check_image=False):
                     if response.status == 200:
                         content_type = response.headers.get('Content-Type', '').lower()
                         if check_image:
-                            # Only check if Content-Type is image/jpeg
                             is_valid = 'image/jpeg' in content_type
                             logger.info(f"URL {url} {'is' if is_valid else 'is not'} a JPEG image")
                             return is_valid
-                        # Existing logic for non-image checks
                         if 'image' in content_type:
                             logger.info(f"URL {url} is a valid image")
                             return True
@@ -95,6 +121,11 @@ async def slash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received start command")
+    # Load test state on start
+    load_test_state(context.user_data)
+    if context.user_data.get('testing', False):
+        await update.message.reply_text("檢測到未完成的測試，正在自動恢復...")
+        asyncio.create_task(run_test(update, context))
     await update.message.reply_text(
         "歡迎使用增強版 URL 測試機器人！\n"
         "\n"
@@ -129,6 +160,7 @@ async def set_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     url = context.args[0]
     context.user_data['url'] = url
+    save_test_state(context.user_data)
     await update.message.reply_text(f"網址已設置為：{url}")
 
 # Set attempts command
@@ -139,6 +171,7 @@ async def set_attempts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     attempts = int(context.args[0])
     context.user_data['attempts'] = attempts
+    save_test_state(context.user_data)
     await update.message.reply_text(f"測試次數已設置為：{attempts}")
 
 # Set initial number command
@@ -149,6 +182,7 @@ async def set_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     initial_number = int(context.args[0])
     context.user_data['initial_number'] = initial_number
+    save_test_state(context.user_data)
     await update.message.reply_text(f"初始數字已設置為：{initial_number}")
 
 # Test command
@@ -164,49 +198,57 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['testing'] = True
     context.user_data['paused'] = False
     context.user_data['valid_urls'] = []
+    context.user_data['current_index'] = 0  # Reset current index
+    save_test_state(context.user_data)
 
-    async def run_test():
-        url_template = context.user_data['url']
-        attempts = context.user_data['attempts']
-        initial_number = context.user_data.get('initial_number', 4571609355900)
-
-        try:
-            for i in range(attempts):
-                if not context.user_data['testing']:
-                    break
-                if context.user_data.get('paused', False):
-                    while context.user_data.get('paused', False) and context.user_data['testing']:
-                        await asyncio.sleep(1)
-
-                current_number = initial_number + i
-                test_url = url_template.format(current_number)
-                logger.info(f"Testing URL {test_url}")
-
-                if await check_url(test_url):
-                    context.user_data['valid_urls'].append(test_url)
-                await asyncio.sleep(1)
-
-                if (i + 1) % 10 == 0:
-                    await update.message.reply_text(f"進度：已完成 {i+1}/{attempts} 次測試")
-
-            valid_urls = context.user_data['valid_urls']
-            if valid_urls:
-                await update.message.reply_text(
-                    "測試完成！以下是所有有效網址：\n" + "\n".join(valid_urls)
-                )
-            else:
-                await update.message.reply_text("測試完成，沒有找到有效網址。")
-            logger.info("Test completed")
-
-        except Exception as e:
-            logger.error(f"Error during test: {e}")
-            await update.message.reply_text(f"測試發生錯誤：{e}")
-        finally:
-            context.user_data['testing'] = False
-            logger.info("Test state reset")
-
-    asyncio.create_task(run_test())
+    asyncio.create_task(run_test(update, context))
     await update.message.reply_text("測試已開始！")
+
+# Run test function
+async def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url_template = context.user_data['url']
+    attempts = context.user_data['attempts']
+    initial_number = context.user_data.get('initial_number', 4571609355900)
+    start_index = context.user_data.get('current_index', 0)
+
+    try:
+        for i in range(start_index, attempts):
+            if not context.user_data['testing']:
+                break
+            if context.user_data.get('paused', False):
+                while context.user_data.get('paused', False) and context.user_data['testing']:
+                    await asyncio.sleep(1)
+
+            current_number = initial_number + i
+            test_url = url_template.format(current_number)
+            logger.info(f"Testing URL {test_url}")
+
+            if await check_url(test_url):
+                context.user_data['valid_urls'].append(test_url)
+            context.user_data['current_index'] = i + 1
+            save_test_state(context.user_data)
+            await asyncio.sleep(1)
+
+            if (i + 1) % 50 == 0:  # Update progress every 50 URLs to reduce Telegram API calls
+                await update.message.reply_text(f"進度：已完成 {i+1}/{attempts} 次測試")
+
+        valid_urls = context.user_data['valid_urls']
+        if valid_urls:
+            await update.message.reply_text(
+                "測試完成！以下是所有有效網址：\n" + "\n".join(valid_urls)
+            )
+        else:
+            await update.message.reply_text("測試完成，沒有找到有效網址。")
+        logger.info("Test completed")
+
+    except Exception as e:
+        logger.error(f"Error during test: {e}")
+        await update.message.reply_text(f"測試發生錯誤：{e}")
+    finally:
+        context.user_data['testing'] = False
+        context.user_data['current_index'] = 0
+        save_test_state(context.user_data)
+        logger.info("Test state reset")
 
 # Pause command
 async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,6 +257,7 @@ async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("沒有正在進行的測試！")
         return
     context.user_data['paused'] = True
+    save_test_state(context.user_data)
     await update.message.reply_text("測試已暫停。使用 /resume 繼續或 /stop 終止。")
 
 # Resume command
@@ -227,6 +270,7 @@ async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("測試未暫停！")
         return
     context.user_data['paused'] = False
+    save_test_state(context.user_data)
     await update.message.reply_text("測試已繼續。")
 
 # Stop command
@@ -236,6 +280,8 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("沒有正在進行的測試！")
         return
     context.user_data['testing'] = False
+    context.user_data['current_index'] = 0
+    save_test_state(context.user_data)
     valid_urls = context.user_data.get('valid_urls', [])
     if valid_urls:
         await update.message.reply_text(
@@ -260,7 +306,7 @@ async def schedule_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_str, time_str, timezone = context.args[0], context.args[1], context.args[2]
     try:
         datetime_str = f"{date_str} {time_str}"
-        scheduled_time = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
+        scheduled_time = datetime.strptime(datetime_str, "%Y-%m-dd %H:%M")
         tz = pytz.timezone(timezone)
         scheduled_time = tz.localize(scheduled_time)
     except (ValueError, pytz.exceptions.UnknownTimeZoneError):
@@ -274,6 +320,7 @@ async def schedule_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['scheduled_attempts'] = context.user_data['attempts']
     context.user_data['scheduled_initial_number'] = context.user_data.get('initial_number', 4571609355900)
     context.user_data['scheduled_chat_id'] = update.effective_chat.id
+    save_test_state(context.user_data)
 
     scheduler.add_job(
         run_scheduled_test,
@@ -305,7 +352,7 @@ async def run_scheduled_test(user_data, bot):
                 valid_urls.append(test_url)
             await asyncio.sleep(1)
 
-            if (i + 1) % 10 == 0:
+            if (i + 1) % 50 == 0:
                 await bot.send_message(chat_id=chat_id, text=f"進度：已完成 {i+1}/{attempts} 次測試")
 
         if valid_urls:
@@ -336,17 +383,21 @@ async def stop_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Set image links command
 async def set_image_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received setimagelinks command")
-    if not context.args:
-        await update.message.reply_text("請提供網址列表！格式：/setimagelinks <網址1>,<網址2>,... 例如 /setimagelinks https://example.com/1.jpg,https://example.com/2.jpg")
-        return
-    links = context.args[0].split(',')
-    # Basic validation
-    valid_links = [link.strip() for link in links if link.strip().startswith('http')]
-    if not valid_links:
-        await update.message.reply_text("請提供有效的網址！")
-        return
-    context.user_data['image_links'] = valid_links
-    await update.message.reply_text(f"已設置 {len(valid_links)} 個網址：\n" + "\n".join(valid_links))
+    try:
+        if not context.args:
+            await update.message.reply_text("請提供網址列表！格式：/setimagelinks <網址1>,<網址2>,... 例如 /setimagelinks https://example.com/1.jpg,https://example.com/2.jpg")
+            return
+        links = context.args[0].split(',')
+        valid_links = [link.strip() for link in links if link.strip().startswith('http')]
+        if not valid_links:
+            await update.message.reply_text("請提供有效的網址！")
+            return
+        context.user_data['image_links'] = valid_links
+        save_test_state(context.user_data)
+        await update.message.reply_text(f"已設置 {len(valid_links)} 個網址：\n" + "\n".join(valid_links))
+    except Exception as e:
+        logger.error(f"Error in set_image_links: {e}")
+        await update.message.reply_text("發生錯誤，請稍後再試！")
 
 # Check images command
 async def check_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -375,7 +426,6 @@ async def schedule_image_check(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     context.user_data['image_check_chat_id'] = update.effective_chat.id
-    # Schedule hourly check
     scheduler.add_job(
         run_image_check,
         'interval',
@@ -457,9 +507,16 @@ async def initialize_bot():
     await application.bot.set_my_commands(commands)
     logger.info("Telegram bot commands set successfully")
 
+    # Check and set webhook
     webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/webhook"
     logger.info(f"Setting webhook to {webhook_url}")
-    await application.bot.set_webhook(webhook_url)
+    webhook_info = await application.bot.get_webhook_info()
+    if webhook_info.url != webhook_url:
+        logger.info("Webhook URL mismatch, resetting...")
+        await application.bot.set_webhook(webhook_url)
+    else:
+        logger.info("Webhook already set correctly")
+
     await application.start()
     scheduler.start()
     logger.info("Bot and scheduler started successfully")
@@ -477,7 +534,20 @@ async def app(scope, receive, send):
     if scope['type'] != 'http':
         return
 
-    # Check if the path is correct
+    # Health check endpoint
+    if scope['path'] == '/health':
+        await send({
+            'type': 'http.response.start',
+            'status': 200,
+            'headers': [[b'content-type', b'text/plain']],
+        })
+        await send({
+            'type': 'http.response.body',
+            'body': b'OK',
+        })
+        return
+
+    # Webhook endpoint
     if scope['path'] != '/webhook':
         await send({
             'type': 'http.response.start',
@@ -490,7 +560,6 @@ async def app(scope, receive, send):
         })
         return
 
-    # Check if the method is POST
     if scope['method'] != 'POST':
         await send({
             'type': 'http.response.start',
@@ -504,7 +573,6 @@ async def app(scope, receive, send):
         return
 
     try:
-        # Receive the request body
         body = b''
         more_body = True
         while more_body:
@@ -512,14 +580,10 @@ async def app(scope, receive, send):
             body += message.get('body', b'')
             more_body = message.get('more_body', False)
 
-        # Parse the JSON body
         update_dict = json.loads(body.decode('utf-8'))
         update = Update.de_json(update_dict, application.bot)
-
-        # Process the update
         await application.process_update(update)
 
-        # Send success response
         await send({
             'type': 'http.response.start',
             'status': 200,
@@ -553,7 +617,8 @@ if __name__ == "__main__":
             host="0.0.0.0",
             port=port,
             loop="asyncio",
-            log_level="info"
+            log_level="info",
+            lifespan="on"
         )
         server = uvicorn.Server(config)
         loop.run_until_complete(server.serve())
