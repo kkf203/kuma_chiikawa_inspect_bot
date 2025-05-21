@@ -60,14 +60,15 @@ async def load_test_state(user_data):
     except Exception as e:
         logger.error(f"Error loading test state: {e}")
 
-# Function to log memory usage
-def log_memory_usage():
+# Function to log resource usage
+def log_resource_usage():
     process = psutil.Process(os.getpid())
     mem_info = process.memory_info()
-    logger.info(f"Memory usage: RSS={mem_info.rss / 1024 / 1024:.2f} MB, VMS={mem_info.vms / 1024 / 1024:.2f} MB")
+    cpu_percent = psutil.cpu_percent(interval=1)
+    logger.info(f"Resource usage: RSS={mem_info.rss / 1024 / 1024:.2f} MB, VMS={mem_info.vms / 1024 / 1024:.2f} MB, CPU={cpu_percent:.2f}%")
 
 # Function to check if a URL is valid with retry
-async def check_url(url, retries=3, timeout=10, check_image=False):
+async def check_url(url, retries=3, timeout=5, check_image=False):  # Reduced timeout to 5 seconds
     async with aiohttp.ClientSession() as session:
         for attempt in range(retries):
             try:
@@ -95,7 +96,7 @@ async def check_url(url, retries=3, timeout=10, check_image=False):
             except Exception as e:
                 logger.error(f"Attempt {attempt+1} failed for URL {url}: {e}")
                 if attempt < retries - 1:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.5)  # Reduced sleep to 0.5 seconds
                 continue
         logger.error(f"URL {url} failed after {retries} attempts")
         return False
@@ -133,7 +134,6 @@ async def slash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received start command")
-    # Load test state on start
     await load_test_state(context.user_data)
     if context.user_data.get('testing', False):
         await update.message.reply_text("檢測到未完成的測試，正在自動恢復...")
@@ -239,14 +239,14 @@ async def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data['valid_urls'].append(test_url)
             context.user_data['current_index'] = i + 1
 
-            # Save state every 100 tests or at the end
-            if (i + 1) % 100 == 0 or i + 1 == attempts:
+            # Save state every 200 tests or at the end
+            if (i + 1) % 200 == 0 or i + 1 == attempts:
                 await save_test_state(context.user_data)
-                log_memory_usage()  # Log memory usage at save points
+                log_resource_usage()  # Log resource usage at save points
 
             await asyncio.sleep(1)
 
-            if (i + 1) % 100 == 0:  # Update progress every 100 URLs to reduce Telegram API calls
+            if (i + 1) % 200 == 0:  # Update progress every 200 URLs
                 await update.message.reply_text(f"進度：已完成 {i+1}/{attempts} 次測試")
 
         valid_urls = context.user_data['valid_urls']
@@ -369,7 +369,7 @@ async def run_scheduled_test(user_data, bot):
                 valid_urls.append(test_url)
             await asyncio.sleep(1)
 
-            if (i + 1) % 100 == 0:
+            if (i + 1) % 200 == 0:
                 await bot.send_message(chat_id=chat_id, text=f"進度：已完成 {i+1}/{attempts} 次測試")
 
         if valid_urls:
@@ -546,12 +546,12 @@ async def shutdown():
     await application.bot.delete_webhook()
     logger.info("Shutdown complete")
 
-# Uvicorn ASGI application
+# Uvicorn ASGI application with enhanced health check
 async def app(scope, receive, send):
     if scope['type'] != 'http':
         return
 
-    # Health check endpoint
+    # Enhanced health check endpoint
     if scope['path'] == '/health':
         await send({
             'type': 'http.response.start',
