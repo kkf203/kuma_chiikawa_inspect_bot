@@ -1,7 +1,7 @@
-requests
-beautifulsoup4
-python-telegram-bot
-apscheduler
-pytz
-aiohttp
-uvicorn
+aiohttp==3.8.6
+python-telegram-bot==20.6
+apscheduler==3.10.4
+uvicorn==0.29.0
+aiofiles==23.2.1
+psutil==5.9.8
+pytz==2023.3
