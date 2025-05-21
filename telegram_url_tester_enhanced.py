@@ -10,6 +10,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 import uvicorn
+import aiofiles
+import psutil
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -29,8 +31,8 @@ scheduler = AsyncIOScheduler()
 # File to store test state
 STATE_FILE = "test_state.json"
 
-# Function to save test state to file
-def save_test_state(user_data):
+# Function to save test state to file (async)
+async def save_test_state(user_data):
     state = {
         'testing': user_data.get('testing', False),
         'paused': user_data.get('paused', False),
@@ -40,19 +42,29 @@ def save_test_state(user_data):
         'current_index': user_data.get('current_index', 0),
         'valid_urls': user_data.get('valid_urls', [])
     }
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, f)
-
-# Function to load test state from file
-def load_test_state(user_data):
     try:
-        with open(STATE_FILE, 'r') as f:
-            state = json.load(f)
+        async with aiofiles.open(STATE_FILE, 'w') as f:
+            await f.write(json.dumps(state))
+    except Exception as e:
+        logger.error(f"Error saving test state: {e}")
+
+# Function to load test state from file (async)
+async def load_test_state(user_data):
+    try:
+        async with aiofiles.open(STATE_FILE, 'r') as f:
+            content = await f.read()
+            state = json.loads(content)
         user_data.update(state)
     except FileNotFoundError:
         logger.info("No previous test state found")
     except Exception as e:
         logger.error(f"Error loading test state: {e}")
+
+# Function to log memory usage
+def log_memory_usage():
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    logger.info(f"Memory usage: RSS={mem_info.rss / 1024 / 1024:.2f} MB, VMS={mem_info.vms / 1024 / 1024:.2f} MB")
 
 # Function to check if a URL is valid with retry
 async def check_url(url, retries=3, timeout=10, check_image=False):
@@ -122,7 +134,7 @@ async def slash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received start command")
     # Load test state on start
-    load_test_state(context.user_data)
+    await load_test_state(context.user_data)
     if context.user_data.get('testing', False):
         await update.message.reply_text("檢測到未完成的測試，正在自動恢復...")
         asyncio.create_task(run_test(update, context))
@@ -160,7 +172,7 @@ async def set_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     url = context.args[0]
     context.user_data['url'] = url
-    save_test_state(context.user_data)
+    await save_test_state(context.user_data)
     await update.message.reply_text(f"網址已設置為：{url}")
 
 # Set attempts command
@@ -171,7 +183,7 @@ async def set_attempts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     attempts = int(context.args[0])
     context.user_data['attempts'] = attempts
-    save_test_state(context.user_data)
+    await save_test_state(context.user_data)
     await update.message.reply_text(f"測試次數已設置為：{attempts}")
 
 # Set initial number command
@@ -182,7 +194,7 @@ async def set_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     initial_number = int(context.args[0])
     context.user_data['initial_number'] = initial_number
-    save_test_state(context.user_data)
+    await save_test_state(context.user_data)
     await update.message.reply_text(f"初始數字已設置為：{initial_number}")
 
 # Test command
@@ -199,7 +211,7 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['paused'] = False
     context.user_data['valid_urls'] = []
     context.user_data['current_index'] = 0  # Reset current index
-    save_test_state(context.user_data)
+    await save_test_state(context.user_data)
 
     asyncio.create_task(run_test(update, context))
     await update.message.reply_text("測試已開始！")
@@ -226,10 +238,15 @@ async def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if await check_url(test_url):
                 context.user_data['valid_urls'].append(test_url)
             context.user_data['current_index'] = i + 1
-            save_test_state(context.user_data)
+
+            # Save state every 100 tests or at the end
+            if (i + 1) % 100 == 0 or i + 1 == attempts:
+                await save_test_state(context.user_data)
+                log_memory_usage()  # Log memory usage at save points
+
             await asyncio.sleep(1)
 
-            if (i + 1) % 50 == 0:  # Update progress every 50 URLs to reduce Telegram API calls
+            if (i + 1) % 100 == 0:  # Update progress every 100 URLs to reduce Telegram API calls
                 await update.message.reply_text(f"進度：已完成 {i+1}/{attempts} 次測試")
 
         valid_urls = context.user_data['valid_urls']
@@ -247,7 +264,7 @@ async def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         context.user_data['testing'] = False
         context.user_data['current_index'] = 0
-        save_test_state(context.user_data)
+        await save_test_state(context.user_data)
         logger.info("Test state reset")
 
 # Pause command
@@ -257,7 +274,7 @@ async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("沒有正在進行的測試！")
         return
     context.user_data['paused'] = True
-    save_test_state(context.user_data)
+    await save_test_state(context.user_data)
     await update.message.reply_text("測試已暫停。使用 /resume 繼續或 /stop 終止。")
 
 # Resume command
@@ -270,7 +287,7 @@ async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("測試未暫停！")
         return
     context.user_data['paused'] = False
-    save_test_state(context.user_data)
+    await save_test_state(context.user_data)
     await update.message.reply_text("測試已繼續。")
 
 # Stop command
@@ -281,7 +298,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     context.user_data['testing'] = False
     context.user_data['current_index'] = 0
-    save_test_state(context.user_data)
+    await save_test_state(context.user_data)
     valid_urls = context.user_data.get('valid_urls', [])
     if valid_urls:
         await update.message.reply_text(
@@ -320,7 +337,7 @@ async def schedule_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['scheduled_attempts'] = context.user_data['attempts']
     context.user_data['scheduled_initial_number'] = context.user_data.get('initial_number', 4571609355900)
     context.user_data['scheduled_chat_id'] = update.effective_chat.id
-    save_test_state(context.user_data)
+    await save_test_state(context.user_data)
 
     scheduler.add_job(
         run_scheduled_test,
@@ -352,7 +369,7 @@ async def run_scheduled_test(user_data, bot):
                 valid_urls.append(test_url)
             await asyncio.sleep(1)
 
-            if (i + 1) % 50 == 0:
+            if (i + 1) % 100 == 0:
                 await bot.send_message(chat_id=chat_id, text=f"進度：已完成 {i+1}/{attempts} 次測試")
 
         if valid_urls:
@@ -393,7 +410,7 @@ async def set_image_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("請提供有效的網址！")
             return
         context.user_data['image_links'] = valid_links
-        save_test_state(context.user_data)
+        await save_test_state(context.user_data)
         await update.message.reply_text(f"已設置 {len(valid_links)} 個網址：\n" + "\n".join(valid_links))
     except Exception as e:
         logger.error(f"Error in set_image_links: {e}")
