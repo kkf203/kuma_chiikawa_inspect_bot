@@ -42,7 +42,7 @@ async def save_test_state(user_data):
         'initial_number': user_data.get('initial_number', 4571609355900),
         'current_index': user_data.get('current_index', 0),
         'valid_urls': user_data.get('valid_urls', []),
-        'batch_size': user_data.get('batch_size', 300),  # Reduced to 300
+        'batch_size': user_data.get('batch_size', 300),
         'batch_number': user_data.get('batch_number', 0)
     }
     try:
@@ -283,7 +283,7 @@ async def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data['batch_number'] = batch_number + 1
                 await save_test_state(context.user_data)
                 await update.message.reply_text("即將開始下一批測試...")
-                await asyncio.sleep(10)  # Increased to 10 seconds
+                await asyncio.sleep(10)
                 await run_test(update, context)
             else:
                 if valid_urls:
@@ -536,7 +536,7 @@ def setup_bot():
     application.add_handler(CommandHandler("setimagelinks", set_image_links))
     application.add_handler(CommandHandler("checkimages", check_images))
     application.add_handler(CommandHandler("scheduleimagecheck", schedule_image_check))
-    application.add_handler(CommandHandler("stopimagecheck", stop_imagecheck))
+    application.add_handler(CommandHandler("stopimagecheck", stop_image_check))
 
 # Main coroutine to initialize the bot
 async def initialize_bot():
