@@ -3,6 +3,7 @@ import aiohttp
 import asyncio
 import logging
 import json
+import time
 from datetime import datetime
 import pytz
 from telegram import Update, BotCommand
@@ -40,7 +41,9 @@ async def save_test_state(user_data):
         'attempts': user_data.get('attempts', 0),
         'initial_number': user_data.get('initial_number', 4571609355900),
         'current_index': user_data.get('current_index', 0),
-        'valid_urls': user_data.get('valid_urls', [])
+        'valid_urls': user_data.get('valid_urls', []),
+        'batch_size': user_data.get('batch_size', 500),  # New: batch size for splitting tests
+        'batch_number': user_data.get('batch_number', 0)  # New: current batch number
     }
     try:
         async with aiofiles.open(STATE_FILE, 'w') as f:
@@ -68,7 +71,7 @@ def log_resource_usage():
     logger.info(f"Resource usage: RSS={mem_info.rss / 1024 / 1024:.2f} MB, VMS={mem_info.vms / 1024 / 1024:.2f} MB, CPU={cpu_percent:.2f}%")
 
 # Function to check if a URL is valid with retry
-async def check_url(url, retries=3, timeout=5, check_image=False):  # Reduced timeout to 5 seconds
+async def check_url(url, retries=3, timeout=5, check_image=False):
     async with aiohttp.ClientSession() as session:
         for attempt in range(retries):
             try:
@@ -96,7 +99,7 @@ async def check_url(url, retries=3, timeout=5, check_image=False):  # Reduced ti
             except Exception as e:
                 logger.error(f"Attempt {attempt+1} failed for URL {url}: {e}")
                 if attempt < retries - 1:
-                    await asyncio.sleep(0.5)  # Reduced sleep to 0.5 seconds
+                    await asyncio.sleep(0.3)  # Reduced to 0.3 seconds
                 continue
         logger.error(f"URL {url} failed after {retries} attempts")
         return False
@@ -183,6 +186,7 @@ async def set_attempts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     attempts = int(context.args[0])
     context.user_data['attempts'] = attempts
+    context.user_data['batch_number'] = 0  # Reset batch number
     await save_test_state(context.user_data)
     await update.message.reply_text(f"測試次數已設置為：{attempts}")
 
@@ -194,6 +198,7 @@ async def set_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     initial_number = int(context.args[0])
     context.user_data['initial_number'] = initial_number
+    context.user_data['batch_number'] = 0  # Reset batch number
     await save_test_state(context.user_data)
     await update.message.reply_text(f"初始數字已設置為：{initial_number}")
 
@@ -210,21 +215,34 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['testing'] = True
     context.user_data['paused'] = False
     context.user_data['valid_urls'] = []
-    context.user_data['current_index'] = 0  # Reset current index
+    context.user_data['current_index'] = 0
+    context.user_data['batch_number'] = 0
     await save_test_state(context.user_data)
 
     asyncio.create_task(run_test(update, context))
     await update.message.reply_text("測試已開始！")
 
-# Run test function
+# Run test function with batch processing
 async def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url_template = context.user_data['url']
-    attempts = context.user_data['attempts']
+    total_attempts = context.user_data['attempts']
     initial_number = context.user_data.get('initial_number', 4571609355900)
-    start_index = context.user_data.get('current_index', 0)
+    batch_size = context.user_data.get('batch_size', 500)
+    batch_number = context.user_data.get('batch_number', 0)
 
     try:
-        for i in range(start_index, attempts):
+        start_index = batch_number * batch_size
+        remaining_attempts = total_attempts - start_index
+        if remaining_attempts <= 0:
+            await update.message.reply_text("所有測試已完成！")
+            return
+
+        attempts_in_batch = min(batch_size, remaining_attempts)
+        end_index = start_index + attempts_in_batch
+
+        await update.message.reply_text(f"開始第 {batch_number + 1} 批測試（{start_index + 1} 到 {end_index}）")
+
+        for i in range(start_index, end_index):
             if not context.user_data['testing']:
                 break
             if context.user_data.get('paused', False):
@@ -239,33 +257,53 @@ async def run_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data['valid_urls'].append(test_url)
             context.user_data['current_index'] = i + 1
 
-            # Save state every 200 tests or at the end
-            if (i + 1) % 200 == 0 or i + 1 == attempts:
+            # Save state and log resources every 100 tests or at the end of batch
+            if (i + 1) % 100 == 0 or i + 1 == end_index:
                 await save_test_state(context.user_data)
-                log_resource_usage()  # Log resource usage at save points
+                log_resource_usage()
 
             await asyncio.sleep(1)
 
-            if (i + 1) % 200 == 0:  # Update progress every 200 URLs
-                await update.message.reply_text(f"進度：已完成 {i+1}/{attempts} 次測試")
+            # Update progress every 500 URLs
+            if (i + 1) % 500 == 0:
+                await update.message.reply_text(f"進度：已完成 {i + 1}/{total_attempts} 次測試")
 
-        valid_urls = context.user_data['valid_urls']
-        if valid_urls:
-            await update.message.reply_text(
-                "測試完成！以下是所有有效網址：\n" + "\n".join(valid_urls)
-            )
-        else:
-            await update.message.reply_text("測試完成，沒有找到有效網址。")
-        logger.info("Test completed")
+        # End of batch
+        if context.user_data['testing']:
+            valid_urls = context.user_data['valid_urls']
+            if valid_urls:
+                await update.message.reply_text(
+                    f"第 {batch_number + 1} 批測試完成！以下是目前找到的有效網址：\n" + "\n".join(valid_urls)
+                )
+            else:
+                await update.message.reply_text(f"第 {batch_number + 1} 批測試完成，沒有找到有效網址。")
+
+            # Schedule next batch if there are more tests
+            if end_index < total_attempts:
+                context.user_data['batch_number'] = batch_number + 1
+                await save_test_state(context.user_data)
+                await update.message.reply_text("即將開始下一批測試...")
+                await asyncio.sleep(5)  # Small delay before next batch
+                await run_test(update, context)
+            else:
+                if valid_urls:
+                    await update.message.reply_text(
+                        "所有測試完成！以下是所有有效網址：\n" + "\n".join(valid_urls)
+                    )
+                else:
+                    await update.message.reply_text("所有測試完成，沒有找到有效網址。")
+                logger.info("All tests completed")
 
     except Exception as e:
         logger.error(f"Error during test: {e}")
         await update.message.reply_text(f"測試發生錯誤：{e}")
     finally:
-        context.user_data['testing'] = False
-        context.user_data['current_index'] = 0
-        await save_test_state(context.user_data)
-        logger.info("Test state reset")
+        if context.user_data['current_index'] >= total_attempts:
+            context.user_data['testing'] = False
+            context.user_data['current_index'] = 0
+            context.user_data['batch_number'] = 0
+            await save_test_state(context.user_data)
+            logger.info("Test state reset")
 
 # Pause command
 async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -298,6 +336,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     context.user_data['testing'] = False
     context.user_data['current_index'] = 0
+    context.user_data['batch_number'] = 0
     await save_test_state(context.user_data)
     valid_urls = context.user_data.get('valid_urls', [])
     if valid_urls:
@@ -369,8 +408,8 @@ async def run_scheduled_test(user_data, bot):
                 valid_urls.append(test_url)
             await asyncio.sleep(1)
 
-            if (i + 1) % 200 == 0:
-                await bot.send_message(chat_id=chat_id, text=f"進度：已完成 {i+1}/{attempts} 次測試")
+            if (i + 1) % 500 == 0:
+                await bot.send_message(chat_id=chat_id, text=f"進度：已完成 {i + 1}/{attempts} 次測試")
 
         if valid_urls:
             await bot.send_message(
@@ -551,8 +590,9 @@ async def app(scope, receive, send):
     if scope['type'] != 'http':
         return
 
-    # Enhanced health check endpoint
+    # Enhanced health check endpoint with timing
     if scope['path'] == '/health':
+        start_time = time.time()
         await send({
             'type': 'http.response.start',
             'status': 200,
@@ -562,6 +602,7 @@ async def app(scope, receive, send):
             'type': 'http.response.body',
             'body': b'OK',
         })
+        logger.info(f"Health check completed in {time.time() - start_time:.3f} seconds")
         return
 
     # Webhook endpoint
